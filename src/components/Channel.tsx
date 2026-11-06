@@ -1,82 +1,172 @@
+import { useEffect, useRef } from 'react'
 import type { CSSProperties } from 'react'
 import type { TrackState } from '../audio/types'
-import { useEngine } from '../hooks/useEngine'
-import { MuteIcon, RecIcon, TrashIcon } from './Icons'
+import { readFrame, useEngine, useFrame } from '../hooks/useEngine'
+import { Fader } from './Fader'
+import { MuteIcon, RecIcon, TrashIcon, UndoIcon } from './Icons'
+import { Knob } from './Knob'
+import { VuMeter } from './VuMeter'
 import { Waveform } from './Waveform'
+import { FX_KNOBS } from './fx'
 
-const STATUS_TEXT = {
-  empty: 'Vazia',
-  armed: 'Armada',
-  recording: 'Gravando',
-  recorded: 'Em loop',
-} as const
+type Props = {
+  index: number
+  track: TrackState
+  transportPlaying: boolean
+  studio: boolean
+  /** REC pulsando: é a próxima ação sugerida pela faixa-guia */
+  hint: boolean
+  dimmed: boolean
+}
 
-export function Channel({ index, track, transportPlaying }: { index: number; track: TrackState; transportPlaying: boolean }) {
+const STATUS = { empty: 'Vazia', armed: 'Armada', recording: 'Gravando', recorded: 'Em loop' } as const
+
+export function Channel({ index, track, transportPlaying, studio, hint, dimmed }: Props) {
   const engine = useEngine()
   const n = index + 1
-  const { status, volume, muted } = track
+  const { status, muted, solo, overdubbing } = track
   const rec = status === 'armed' || status === 'recording'
-  const statusText = status === 'recorded' && !transportPlaying ? 'Pronta' : STATUS_TEXT[status]
+  const stripRef = useRef<HTMLElement>(null)
+  const armBar = useRef<HTMLDivElement>(null)
+  const armText = useRef<HTMLSpanElement>(null)
+  const prev = useRef(status)
+
+  // flash "Loop!" quando o take fecha (recording → recorded)
+  useEffect(() => {
+    const el = stripRef.current
+    if (el && prev.current === 'recording' && status === 'recorded') {
+      el.setAttribute('data-flash', '')
+      const id = setTimeout(() => el.removeAttribute('data-flash'), 450)
+      prev.current = status
+      return () => clearTimeout(id)
+    }
+    prev.current = status
+  }, [status])
+
+  // armado: barra "começa em…" encolhendo até o início do próximo loop
+  const lastText = useRef('')
+  useFrame(() => {
+    if (status !== 'armed' || !armBar.current || !armText.current) return
+    const p = readFrame(engine).pos
+    const left = p.countIn ? 1 : 1 - p.phase
+    armBar.current.style.transform = `scaleX(${left})`
+    const txt = p.countIn ? 'Na contagem…' : `Começa em ${(left * engine.getState().loopDuration).toFixed(1).replace('.', ',')} s`
+    if (txt !== lastText.current) armText.current.textContent = lastText.current = txt
+  })
+
+  const recLabel = rec ? 'Cancelar' : status === 'recorded' ? (overdubbing ? 'Overdub' : 'Regravar') : 'Gravar'
+  const statusText = status === 'recorded' && !transportPlaying ? 'Pronta' : STATUS[status]
 
   return (
     <section
-      className="ch"
+      ref={stripRef}
+      className="strip"
       data-status={status}
       data-muted={muted || undefined}
+      data-dim={dimmed || undefined}
       style={{ '--ch': `var(--ch${n})`, '--ch-lit': `var(--ch${n}-lit)` } as CSSProperties}
       aria-labelledby={`ch${n}-name`}
     >
-      <header className="ch__head">
-        <h2 className="ch__name" id={`ch${n}-name`}>
-          <span className="ch__num">{n}</span> Faixa {n}
-        </h2>
-        <span className="ch__status" role="status">{statusText}</span>
+      <header className="strip__head">
+        <span className="strip__num" aria-hidden="true">{n}</span>
+        <h2 className="strip__name" id={`ch${n}-name`}>Faixa {n}</h2>
+        <span className="strip__status" role="status">{statusText}</span>
       </header>
 
-      <div className="wave">
+      <div className="screen">
         <Waveform track={index} status={status} muted={muted} />
-        {status === 'empty' && <span className="wave__hint">Aperte gravar<span className="kbd-only"> ou a tecla {n}</span></span>}
+        {status === 'empty' && <span className="screen__hint">Vazia</span>}
+        {status === 'recording' && <span className="screen__rec"><i /> Gravando</span>}
+        {status === 'armed' && (
+          <div className="screen__arm">
+            <span ref={armText}>Começa em…</span>
+            <div className="screen__armbar"><div ref={armBar} /></div>
+          </div>
+        )}
+        <span className="screen__loop" aria-hidden="true">Loop!</span>
       </div>
 
       <button
         className="rec"
+        data-hint={hint || undefined}
         aria-pressed={rec}
         onClick={() => engine.record(index)}
-        aria-label={`${rec ? "Cancelar gravação" : status === "recorded" ? "Regravar (apaga o take atual)" : "Gravar"}, faixa ${n}`}
+        aria-label={`${rec ? 'Cancelar gravação' : recLabel}, faixa ${n}${status === 'recorded' && !overdubbing ? ' (apaga o take atual)' : ''}`}
         aria-keyshortcuts={String(n)}
       >
-        <span className="rec__dot"><RecIcon size={22} /></span>
-        <span className="rec__text">
-          {rec ? "Cancelar" : status === "recorded" ? "Regravar" : "Gravar"}
-          {status === "recorded" && <small className="rec__sub">apaga o take atual</small>}
-        </span>
+        <span className="rec__dot"><RecIcon size={18} /></span>
+        <span className="rec__text">{recLabel}</span>
         <kbd className="rec__key">{n}</kbd>
       </button>
 
-      <div className="ch__mix">
-        <label className="fader">
-          <span className="fader__label">Volume</span>
-          <input
-            type="range"
-            min={0}
-            max={1}
-            step={0.01}
-            value={volume}
-            onChange={(e) => engine.setVolume(index, Number(e.target.value))}
-            aria-label={`Volume da faixa ${n}`}
-            aria-valuetext={`${Math.round(volume * 100)}%`}
-          />
-          <span className="fader__val">{Math.round(volume * 100)}</span>
-        </label>
-        <div className="ch__btns">
-          <button className="btn btn--sm btn--toggle btn--mute" aria-pressed={muted} onClick={() => engine.setMute(index, !muted)} aria-label={`Mudo, faixa ${n}`}>
-            <MuteIcon size={16} /> <span>Mudo</span>
+      {studio && (
+        <div className="seg seg--mode" role="group" aria-label={`Modo de gravação, faixa ${n}`}>
+          <button className="seg__btn" aria-pressed={!overdubbing} onClick={() => engine.setTrack(index, { overdubbing: false })} title="Gravar apaga o take anterior" aria-label="Substituir">
+            Subst.
           </button>
-          <button className="btn btn--sm btn--ghost" onClick={() => engine.clear(index)} disabled={status === 'empty'} aria-label={`Apagar faixa ${n}`}>
-            <TrashIcon size={16} /> <span>Apagar</span>
+          <button className="seg__btn" aria-pressed={overdubbing} onClick={() => engine.setTrack(index, { overdubbing: true })} title="Gravar soma uma camada ao take">
+            Overdub
           </button>
         </div>
+      )}
+
+      {studio && (
+        <div className="strip__knobs">
+          {FX_KNOBS.map(({ param, ...k }) => (
+            <Knob
+              key={param}
+              {...k}
+              name={`${k.label}, faixa ${n}`}
+              value={track[param]}
+              onChange={(v) => engine.setTrack(index, { [param]: v })}
+            />
+          ))}
+        </div>
+      )}
+
+      <div className="strip__mix">
+        <Fader name={`Volume, faixa ${n}`} value={track.volume} onChange={(v) => engine.setTrack(index, { volume: v })} />
+        <VuMeter index={index} />
       </div>
+
+      <div className="strip__btns">
+        <button className="tbtn tbtn--mute" aria-pressed={muted} onClick={() => engine.setTrack(index, { muted: !muted })} aria-label={`Mudo, faixa ${n}`} title="Mudo">
+          <MuteIcon size={15} /><span>M</span>
+        </button>
+        {studio && (
+          <>
+            <button className="tbtn tbtn--solo" aria-pressed={solo} onClick={() => engine.setTrack(index, { solo: !solo })} aria-label={`Solo, faixa ${n}`} title="Solo">
+              <span>S</span>
+            </button>
+            <button className="tbtn" onClick={() => engine.clear(index)} disabled={status === 'empty'} aria-label={`Apagar, faixa ${n}`} title="Apagar take">
+              <TrashIcon size={15} />
+            </button>
+            <button className="tbtn" onClick={() => engine.undo(index)} disabled={!track.canUndo} aria-label={`Desfazer, faixa ${n}`} title="Desfazer">
+              <UndoIcon size={15} />
+            </button>
+          </>
+        )}
+      </div>
+
+      {studio && (
+        <details className="strip__more">
+          <summary>Ajuste fino</summary>
+          <label className="nudge">
+            <span>Nudge</span>
+            <input
+              type="range"
+              min={-100}
+              max={100}
+              step={1}
+              value={track.nudge}
+              onChange={(e) => engine.setTrack(index, { nudge: Number(e.target.value) })}
+              aria-label={`Nudge, faixa ${n}`}
+              aria-valuetext={`${track.nudge} ms`}
+            />
+            <output>{track.nudge > 0 ? '+' : ''}{track.nudge} ms</output>
+          </label>
+        </details>
+      )}
     </section>
   )
 }

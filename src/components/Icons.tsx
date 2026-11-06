@@ -15,3 +15,4 @@ export const TrashIcon = ({ size = 24 }: P) => svg(size, <><path d="M4 7h16M10 7
 export const MuteIcon = ({ size = 24 }: P) => svg(size, <><path d="M4 9v6h4l5 4V5L8 9z" /><path d="M17 9l4 6M21 9l-4 6" /></>)
 export const LockIcon = ({ size = 24 }: P) => svg(size, <><rect x="5" y="11" width="14" height="9" rx="1.5" /><path d="M8 11V8a4 4 0 0 1 8 0v3" /></>)
 export const MicIcon = ({ size = 24 }: P) => svg(size, <><rect x="9" y="3" width="6" height="11" rx="3" /><path d="M5 11a7 7 0 0 0 14 0M12 18v3" /></>)
+export const UndoIcon = ({ size = 24 }: P) => svg(size, <><path d="M9 14L4 9l5-5" /><path d="M4 9h10a6 6 0 0 1 0 12h-3" /></>)

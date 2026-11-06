@@ -18,7 +18,7 @@ export function StartScreen({ state }: { state: EngineState }) {
         </div>
         <h1 className="start__title">Loop Studio</h1>
         <p className="start__lede">
-          Quatro faixas, um microfone. Bata na mesa, bata palmas, cante: cada gravação vira um loop que toca junto com as outras.
+          Um microfone, oito canais e uma bateria. Bata na mesa, bata palmas, cante: cada gravação vira um loop que toca junto com as outras.
         </p>
         {/* a rejeição já vira state.error; o catch só evita erro não tratado */}
         <button className="btn btn--primary start__go" onClick={() => engine.init().catch(() => {})} disabled={busy}>

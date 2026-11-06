@@ -3,16 +3,45 @@
 /**
  * empty: sem áudio. armed: aguardando o início do loop para gravar.
  * recording: gravando. recorded: tem áudio (soa enquanto o transporte toca).
- * Gravar numa faixa 'recorded' descarta o take antigo ao armar (evita vazar no microfone);
- * cancelar (record de novo) deixa a faixa 'empty'.
+ * Gravar (substituir) numa faixa 'recorded' descarta o take antigo ao armar; cancelar deixa 'empty'.
+ * Overdub numa faixa 'recorded' soma a nova camada ao take; cancelar mantém o take.
+ * Canal de bateria: 'recorded' se o padrão tem algum passo ligado, senão 'empty'.
  */
 export type TrackStatus = 'empty' | 'armed' | 'recording' | 'recorded'
 
+/** mic: gravado pelo microfone. drums: bateria sintetizada pelo sequenciador (último canal). */
+export type TrackKind = 'mic' | 'drums'
+
 export interface TrackState {
+  readonly kind: TrackKind
   readonly status: TrackStatus
   readonly volume: number // 0..1
   readonly muted: boolean
+  readonly solo: boolean // algum solo ligado → só canais em solo soam
+  readonly pan: number // -1 (esq.)..1 (dir.)
+  readonly filter: number // 0..1; 1 = aberto, 0 = passa-baixa fechado (~200 Hz)
+  readonly delay: number // 0..1, envio para o delay sincronizado (colcheia pontuada)
+  readonly reverb: number // 0..1, envio para o reverb
+  /** ms, -100..100. Desloca o take no tempo (positivo = toca mais tarde). Só canais mic. */
+  readonly nudge: number
+  /** Só canais mic: se o próximo record sincroniza com overdub (true) ou substitui (false). */
+  readonly overdubbing: boolean
+  /** Há um estado anterior (1 nível) para undo(track). */
+  readonly canUndo: boolean
 }
+
+/** Resultado da calibração: offsetMs já aplicado em latencyOffset. */
+export interface CalibrationResult {
+  offsetMs: number
+  matched: number // palmas reconhecidas
+  total: number // cliques tocados
+  jitterMs: number
+}
+
+export type DrumVoice = 'kick' | 'snare' | 'hat' | 'clap'
+export const DRUM_VOICES: readonly DrumVoice[] = ['kick', 'snare', 'hat', 'clap']
+/** 16 passos (semicolcheias) por compasso. */
+export const STEPS_PER_BAR = 16
 
 /** idle: antes de init. ready: pronto. error: ver `error` (mic negado/desconectado etc.). disposed: após dispose. */
 export type EngineStatus = 'idle' | 'initializing' | 'ready' | 'error' | 'disposed'
@@ -31,15 +60,34 @@ export interface EngineState {
   readonly latencyOffset: number
   readonly playing: boolean
   readonly loopDuration: number // segundos
+  readonly masterVolume: number // 0..1
+  /** 8 canais mic + 1 canal drums no fim (índice tracks.length - 1). */
   readonly tracks: readonly TrackState[]
+  /** pattern[voz][passo], voz na ordem de DRUM_VOICES, bars * STEPS_PER_BAR passos. */
+  readonly pattern: readonly (readonly boolean[])[]
 }
 
-/** Posição do que está sendo OUVIDO (currentTime - outputLatency), não do relógio agendado. */
+/** Posição do que está sendo OUVIDO (currentTime - latência de saída), não do relógio agendado. */
 export interface Position {
   playing: boolean
   phase: number // 0..1 dentro do loop
   beat: number // 0..(bars*4-1)
+  step: number // 0..(bars*STEPS_PER_BAR-1), para o playhead do sequenciador
   countIn: boolean
+}
+
+/** Configuração editável de um canal (tudo de TrackState menos kind/status). */
+export type TrackParams = Pick<TrackState, 'volume' | 'muted' | 'solo' | 'pan' | 'filter' | 'delay' | 'reverb' | 'nudge' | 'overdubbing'>
+
+/** Projeto serializável (IndexedDB). Áudio mono por canal mic; null = vazio. */
+export interface ProjectData {
+  version: 1
+  bpm: number
+  bars: 1 | 2 | 4
+  masterVolume: number
+  sampleRate: number
+  tracks: (TrackParams & { audio: Float32Array | null })[]
+  pattern: boolean[][]
 }
 
 /** Comandos chamados com status diferente de 'ready' são ignorados (exceto init/dispose). */
@@ -48,22 +96,47 @@ export interface LoopEngine {
   init(): Promise<void>
   /** Para tudo, fecha AudioContext e libera o microfone. Status vira 'disposed'. */
   dispose(): void
-  /** Retorna false se já houver faixa não vazia (BPM/compassos travam). */
+  /** Retorna false se já houver canal mic não vazio (BPM/compassos travam). O padrão de bateria não trava. */
   setBpm(bpm: number): boolean
+  /** Ao mudar, o padrão é redimensionado (repete os compassos existentes ou corta). */
   setBars(bars: 1 | 2 | 4): boolean
   setMetronome(on: boolean): void
   setLatencyOffset(ms: number): void
+  /**
+   * Assistente "bata palma no clique": para o transporte, toca `clicks` cliques (default 8) no BPM atual,
+   * grava o mic e estima a latência. Sucesso → aplica latencyOffset e resolve; palmas insuficientes → null.
+   * `onClick(i)` é chamado no instante audível de cada clique (para a UI acender bolinhas).
+   */
+  calibrateLatency(opts?: { clicks?: number; onClick?: (i: number) => void }): Promise<CalibrationResult | null>
+  /** Desfaz a última ação destrutiva do canal (gravar/overdub/apagar; drums: mudança de padrão). 1 nível. */
+  undo(track: number): void
+  setMasterVolume(volume: number): void
   play(): void
   stop(): void
-  /** Arma a faixa; chamar de novo enquanto armada/gravando cancela. */
+  /** Arma o canal mic (substitui ou overdub conforme `overdubbing`); chamar de novo enquanto armado/gravando cancela. Ignorado no canal drums. */
   record(track: number): void
+  /** Canal mic: apaga o take. Canal drums: limpa o padrão. */
   clear(track: number): void
   clearAll(): void
-  setVolume(track: number, volume: number): void
-  setMute(track: number, muted: boolean): void
+  /** Atualiza parâmetros do canal (merge parcial). Valores fora da faixa são limitados. */
+  setTrack(track: number, params: Partial<TrackParams>): void
+  toggleStep(voice: number, step: number): void
+  /** Substitui o padrão inteiro numa única notificação; redimensionado para bars*STEPS_PER_BAR (repete ou corta). */
+  setPattern(pattern: boolean[][]): void
+  /** Toca uma voz da bateria agora (pads ao vivo / prévia). */
+  triggerDrum(voice: DrumVoice): void
   /** Leitura barata, para requestAnimationFrame. */
   getPosition(): Position
   getPeaks(track: number, n: number): Float32Array | null
+  /** Nível atual 0..1 já em escala de meter (pico em dB, -48..0 dB → 0..1) por canal (tracks.length valores) + master no fim, para VU meters. */
+  getLevels(): Float32Array
+  /** Mixagem final em tempo real, para gravar vídeo com áudio (MediaRecorder). */
+  getOutputStream(): MediaStream | null
+  /** Renderiza `loops` repetições do loop com a mixagem atual (inclui FX e bateria; sem metrônomo). */
+  renderMix(loops: number): Promise<AudioBuffer>
+  exportProject(): ProjectData
+  /** Para o transporte e substitui tudo pelo projeto. */
+  importProject(data: ProjectData): void
   getState(): EngineState
   /** Retorna função para cancelar a inscrição. */
   subscribe(fn: (state: EngineState) => void): () => void

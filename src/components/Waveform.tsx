@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react'
 import type { TrackStatus } from '../audio/types'
-import { useEngine, useFrame } from '../hooks/useEngine'
+import { readFrame, useEngine, useFrame } from '../hooks/useEngine'
 
 const BAR = 3 // px por barra (2 de traço + 1 de folga)
 
@@ -42,7 +42,7 @@ export function Waveform({ track, status, muted }: { track: number; status: Trac
     const { w, h, dpr } = size.current
     if (!c || !w) return
     const ctx = c.getContext('2d')!
-    const pos = engine.getPosition()
+    const pos = readFrame(engine).pos
     const n = Math.max(8, Math.floor(w / BAR))
     // durante a gravação os picos crescem: relê a cada 6 frames
     if (status === 'recording' && frame.current++ % 6 === 0) peaks.current = engine.getPeaks(track, n)

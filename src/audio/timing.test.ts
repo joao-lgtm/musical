@@ -1,5 +1,24 @@
 import { describe, expect, it } from 'vitest'
-import { captureLatency, heardTime, isAccent, recordStart, loopDuration, loopOffset, nextLoopStart, positionAt, timeToFrame } from './timing'
+import {
+  calibrationPlan,
+  captureLatency,
+  delayTime,
+  filterFreq,
+  heardTime,
+  isAccent,
+  nudgedOffset,
+  overdubMix,
+  recordStart,
+  resample,
+  resizePattern,
+  stepDuration,
+  loopDuration,
+  loopOffset,
+  nextLoopStart,
+  positionAt,
+  timeToFrame,
+  vuLevel,
+} from './timing'
 
 describe('timing', () => {
   it('loopDuration', () => {
@@ -29,12 +48,13 @@ describe('timing', () => {
 
   it('positionAt', () => {
     // 120 bpm, 1 compasso: tempo = 0.5s, loop = 2s, t0 = 10
-    expect(positionAt(8.0, 10, 120, 1)).toEqual({ phase: 0, beat: 0, countIn: true })
-    expect(positionAt(9.6, 10, 120, 1)).toEqual({ phase: 0, beat: 3, countIn: true })
+    expect(positionAt(8.0, 10, 120, 1)).toEqual({ phase: 0, beat: 0, step: 0, countIn: true })
+    expect(positionAt(9.6, 10, 120, 1)).toEqual({ phase: 0, beat: 3, step: 0, countIn: true })
     const p = positionAt(11.25, 10, 120, 1)
     expect(p.countIn).toBe(false)
     expect(p.phase).toBeCloseTo(0.625)
     expect(p.beat).toBe(2)
+    expect(p.step).toBe(10)
     expect(positionAt(13.9, 10, 120, 2).beat).toBe(7)
   })
 
@@ -71,5 +91,50 @@ describe('timing', () => {
     expect(heardTime(10.05, 0.05)).toBeCloseTo(10)
     // já agendado em t0, mas ainda não ouvido: continua na contagem
     expect(positionAt(heardTime(10.01, 0.05), 10, 120, 1).countIn).toBe(true)
+  })
+
+  it('passos, delay e nudge', () => {
+    expect(stepDuration(120)).toBe(0.125)
+    expect(delayTime(120)).toBe(0.375)
+    expect(positionAt(13.99, 10, 120, 2).step).toBe(31)
+    // loop 2s, t0 = 10: nudge +0.1 → no instante 10.5 o take está em 0.4
+    expect(nudgedOffset(10.5, 10, 2, 0.1)).toBeCloseTo(0.4)
+    expect(nudgedOffset(10, 10, 2, 0.1)).toBeCloseTo(1.9)
+    expect(nudgedOffset(10, 10, 2, -0.1)).toBeCloseTo(0.1)
+  })
+
+  it('filtro e VU', () => {
+    expect(filterFreq(0)).toBe(200)
+    expect(filterFreq(1)).toBeCloseTo(20000)
+    expect(filterFreq(0.5)).toBeCloseTo(2000)
+    expect(vuLevel(0)).toBe(0)
+    expect(vuLevel(1)).toBe(1)
+    expect(vuLevel(2)).toBe(1)
+    expect(vuLevel(Math.pow(10, -24 / 20))).toBeCloseTo(0.5)
+  })
+
+  it('resizePattern repete compassos ou corta', () => {
+    const p = [[true, false], [false, true]]
+    expect(resizePattern(p, 4)).toEqual([[true, false, true, false], [false, true, false, true]])
+    expect(resizePattern([[true, false, false, true]], 2)).toEqual([[true, false]])
+    expect(resizePattern([[]], 3)).toEqual([[false, false, false]])
+  })
+
+  it('resample e overdubMix', () => {
+    expect(Array.from(resample(new Float32Array([0, 1]), 4))).toEqual([0, 0.5, 1, 1])
+    const take = new Float32Array([1, 0, 0, 0])
+    const layer = new Float32Array([0, 1, 0, 0])
+    expect(Array.from(overdubMix(take, layer, 0))).toEqual([1, 1, 0, 0])
+    // take com nudge de 1 amostra: amostra j do take toca no instante j+1 do loop
+    expect(Array.from(overdubMix(take, layer, 1))).toEqual([2, 0, 0, 0])
+    expect(Array.from(overdubMix(take, layer, -1))).toEqual([1, 0, 1, 0])
+  })
+
+  it('calibrationPlan', () => {
+    const p = calibrationPlan(10, 120, 4)
+    // 1 compasso (2s) + 0.1 de margem
+    expect(p.clickTimes).toEqual([12.1, 12.6, 13.1, 13.6])
+    expect(p.start).toBeCloseTo(11.8)
+    expect(p.end).toBeCloseTo(14.1)
   })
 })

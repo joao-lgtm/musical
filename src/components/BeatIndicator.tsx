@@ -1,7 +1,8 @@
 import { useRef } from 'react'
-import { useEngine, useFrame } from '../hooks/useEngine'
+import { STEPS_PER_BAR } from '../audio/types'
+import { readFrame, useEngine, useFrame } from '../hooks/useEngine'
 
-// LEDs de tempo + leitura "compasso.tempo"; atualizado por rAF, sem re-render
+// LEDs de tempo + fileira de passos + leitura "compasso.tempo"; tudo via rAF, sem re-render
 export function BeatIndicator({ bars }: { bars: number }) {
   const engine = useEngine()
   const rootRef = useRef<HTMLDivElement>(null)
@@ -11,16 +12,16 @@ export function BeatIndicator({ bars }: { bars: number }) {
   useFrame(() => {
     const root = rootRef.current
     if (!root) return
-    const p = engine.getPosition()
-    const key = `${bars}|${p.playing}|${p.countIn}|${p.beat}`
+    const p = readFrame(engine).pos
+    const key = `${bars}|${p.playing}|${p.countIn}|${p.beat}|${p.step}`
     if (key === last.current) return
     last.current = key
     root.dataset.mode = !p.playing ? 'idle' : p.countIn ? 'count' : 'play'
-    const leds = root.querySelectorAll<HTMLElement>('.led')
-    leds.forEach((el, i) => {
-      // na contagem acende só o primeiro compasso
-      const on = p.playing && (p.countIn ? i === p.beat % 4 : i === p.beat)
-      el.toggleAttribute('data-on', on)
+    root.querySelectorAll<HTMLElement>('.led').forEach((el, i) => {
+      el.toggleAttribute('data-on', p.playing && (p.countIn ? i === p.beat % 4 : i === p.beat))
+    })
+    root.querySelectorAll<HTMLElement>('.step').forEach((el, i) => {
+      el.toggleAttribute('data-on', p.playing && !p.countIn && i === p.step)
     })
     if (readRef.current) {
       readRef.current.textContent = !p.playing
@@ -39,12 +40,21 @@ export function BeatIndicator({ bars }: { bars: number }) {
         <span className="beat__label beat__label--idle">Parado</span>
         <span className="beat__num" ref={readRef} aria-hidden="true">—</span>
       </div>
-      <div className="beat__leds" aria-hidden="true">
-        {Array.from({ length: bars }, (_, b) => (
-          <div className="beat__bar" key={b}>
-            {[0, 1, 2, 3].map((t) => <span className={`led${t === 0 ? ' led--down' : ''}`} key={t} />)}
-          </div>
-        ))}
+      <div className="beat__grid" aria-hidden="true">
+        <div className="beat__leds">
+          {Array.from({ length: bars }, (_, b) => (
+            <div className="beat__bar" key={b}>
+              {[0, 1, 2, 3].map((t) => <span className={`led${t === 0 ? ' led--down' : ''}`} key={t} />)}
+            </div>
+          ))}
+        </div>
+        <div className="beat__steps">
+          {Array.from({ length: bars }, (_, b) => (
+            <div className="beat__bar" key={b}>
+              {Array.from({ length: STEPS_PER_BAR }, (_, s) => <span className={`step${s % 4 === 0 ? ' step--beat' : ''}`} key={s} />)}
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   )

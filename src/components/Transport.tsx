@@ -8,7 +8,7 @@ const BARS = [1, 2, 4] as const
 
 export function Transport({ state }: { state: EngineState }) {
   const engine = useEngine()
-  const locked = state.tracks.some((t) => t.status !== 'empty')
+  const locked = state.tracks.some((t) => t.kind === 'mic' && t.status !== 'empty')
   const hasAudio = state.tracks.some((t) => t.status !== 'empty')
   const [confirming, setConfirming] = useState(false)
 
@@ -30,10 +30,12 @@ export function Transport({ state }: { state: EngineState }) {
       <button
         className="btn btn--play"
         onClick={() => (state.playing ? engine.stop() : engine.play())}
-        aria-label={state.playing ? 'Parar (Espaço)' : 'Tocar (Espaço)'}
+        aria-label={state.playing ? 'Parar' : 'Tocar'}
+        aria-keyshortcuts="Space"
         data-on={state.playing || undefined}
       >
         {state.playing ? <StopIcon size={28} /> : <PlayIcon size={28} />}
+        <kbd className="btn__key" aria-hidden="true">Espaço</kbd>
       </button>
 
       <div className="field field--bpm" data-locked={locked || undefined}>
@@ -84,7 +86,7 @@ export function Transport({ state }: { state: EngineState }) {
       <BeatIndicator bars={state.bars} />
 
       <p id="lock-note" className="transport__note" hidden={!locked}>
-        <LockIcon size={12} /> Andamento e compassos travados enquanto houver faixa armada, gravando ou gravada. Apague tudo para mudar.
+        <LockIcon size={12} /> Andamento e compassos travados enquanto houver canal de microfone armado, gravando ou gravado. Apague tudo para mudar.
       </p>
     </section>
   )
