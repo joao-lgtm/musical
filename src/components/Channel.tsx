@@ -5,6 +5,7 @@ import { readFrame, useEngine, useFrame } from '../hooks/useEngine'
 import { Fader } from './Fader'
 import { MuteIcon, RecIcon, TrashIcon, UndoIcon } from './Icons'
 import { Knob } from './Knob'
+import { TrackName } from './TrackName'
 import { VuMeter } from './VuMeter'
 import { Waveform } from './Waveform'
 import { FX_KNOBS } from './fx'
@@ -74,7 +75,7 @@ export function Channel({ index, track, transportPlaying, studio, hint, dimmed, 
     >
       <header className="strip__head">
         <span className="strip__num" aria-hidden="true">{n}</span>
-        <h2 className="strip__name" id={`ch${n}-name`}>Faixa {n}</h2>
+        <TrackName id={`ch${n}-name`} name={track.name} fallback={`Faixa ${n}`} onRename={(name) => engine.setTrack(index, { name })} />
         <span className="strip__status" role="status">{statusText}</span>
       </header>
 

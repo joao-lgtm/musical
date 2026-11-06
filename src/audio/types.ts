@@ -14,6 +14,8 @@ export type TrackKind = 'mic' | 'drums'
 
 export interface TrackState {
   readonly kind: TrackKind
+  /** Nome exibido (editável, até 24 caracteres). Padrão: 'Faixa N' / 'Bateria'. */
+  readonly name: string
   readonly status: TrackStatus
   readonly volume: number // 0..1
   readonly muted: boolean
@@ -79,7 +81,7 @@ export interface Position {
 }
 
 /** Configuração editável de um canal (tudo de TrackState menos kind/status). */
-export type TrackParams = Pick<TrackState, 'volume' | 'muted' | 'solo' | 'pan' | 'filter' | 'delay' | 'reverb' | 'nudge' | 'overdubbing'>
+export type TrackParams = Pick<TrackState, 'name' | 'volume' | 'muted' | 'solo' | 'pan' | 'filter' | 'delay' | 'reverb' | 'nudge' | 'overdubbing'>
 
 /** Projeto serializável (IndexedDB). Áudio mono por canal mic; null = vazio. */
 export interface ProjectData {

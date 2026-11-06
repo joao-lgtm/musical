@@ -265,7 +265,10 @@ input[type='range']::-moz-range-thumb { width: 16px; height: 24px; border: 0; bo
 .mixer[data-studio] { --strip-w: 126px; --screen-h: 56px; --fader-h: 132px; padding: 10px; }
 .mixer[data-studio] .strip { padding: 8px; gap: 8px; }
 .mixer[data-studio] .strip__head { justify-content: space-between; }
-.mixer[data-studio] .strip:not(.strip--master) .strip__name { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+/* Estúdio: status vira um LED ao lado do nome */
+.mixer[data-studio] .strip__head { gap: 6px; }
+.mixer[data-studio] .strip__status { flex: none; width: 8px; height: 8px; padding: 0; border-radius: 50%; font-size: 0; overflow: hidden; }
+.mixer[data-studio] .strip[data-status="recorded"] .strip__status { background: var(--ch-lit); box-shadow: 0 0 8px var(--ch-lit); }
 .mixer[data-studio] .rec { min-height: 40px; padding: 0 8px; font-size: 0.875rem; }
 .mixer[data-studio] .tbtn { padding: 0 2px; }
 .mixer__rail { display: flex; gap: 10px; width: max-content; min-width: 100%; justify-content: safe center; }
@@ -567,3 +570,64 @@ input[type='range']::-moz-range-thumb { width: 16px; height: 24px; border: 0; bo
   /* Estúdio no celular: canais vazios além do próximo ficam só com cabeçalho + Gravar */
   .strip[data-collapsible] > :not(.strip__head):not(.rec) { display: none; }
 }
+
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+/* nome editável */
+.strip__edit {
+  flex: none; display: grid; place-items: center; width: 22px; height: 22px; padding: 0;
+  border: 0; border-radius: 5px; background: transparent; color: var(--ink-2); cursor: pointer;
+  opacity: 0; transition: opacity 140ms var(--ease);
+}
+.strip__head:hover .strip__edit, .strip__edit:focus-visible { opacity: 1; }
+.strip__edit:hover { background: var(--panel-hi); color: var(--ink); }
+.strip__name { cursor: text; }
+.strip__rename {
+  flex: 1; min-width: 0; height: 26px; padding: 0 6px;
+  border: 0; border-radius: 5px; background: var(--screen); color: var(--ink);
+  box-shadow: inset 0 0 0 1px var(--ch-lit, var(--line-2));
+  font: 700 0.875rem/1 'Archivo', sans-serif; font-variation-settings: 'wdth' 82;
+}
+.strip__rename:focus-visible { outline: none; box-shadow: inset 0 0 0 2px var(--ch-lit, var(--ch1-lit)); }
+@media (hover: none) { .strip__edit { opacity: 1; } }
+
+/* faixa-guia: frase + oferta de calibração */
+.guide p { flex: 1; min-width: 0; }
+.guide__cal {
+  flex: none; min-height: 36px; padding: 0 12px; border: 0; border-radius: 6px;
+  background: transparent; color: var(--ch1-lit); font-weight: 650; font-size: 0.8125rem; cursor: pointer;
+  box-shadow: inset 0 0 0 1px rgb(147 171 255 / 0.4);
+}
+.guide__cal:hover { background: rgb(147 171 255 / 0.12); }
+@media (max-width: 720px) { .guide { flex-wrap: wrap; } }
+
+/* calibração */
+.cal__lede { margin-top: 10px; color: var(--ink-2); font-size: 0.9375rem; }
+.cal__dots { display: flex; gap: 10px; justify-content: center; margin: 24px 0 8px; }
+.cal__dots i { width: 22px; height: 22px; border-radius: 50%; background: var(--screen); box-shadow: inset 0 0 0 1px var(--line-2); transition: background 80ms, box-shadow 80ms; }
+.cal__dots i[data-on] { background: var(--ch2-lit); box-shadow: 0 0 16px var(--ch2-lit); }
+.cal__dots[data-phase='fail'] i[data-on] { background: var(--ch4-lit); box-shadow: none; }
+.cal__actions { gap: 8px; }
+.adv__cal { margin-top: 10px; }
+
+/* botão Performance */
+.btn--perf { background: var(--ink); color: var(--on-color); }
+.btn--perf:hover:not(:disabled) { background: #fff; }
+.btn--perf kbd { background: rgb(0 0 0 / 0.12); color: var(--on-color); box-shadow: none; }
+
+/* modo performance */
+.perf { position: fixed; inset: 0; z-index: 40; background: #050608; }
+.perf__canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.perf__hud { position: absolute; font-size: 0.875rem; color: var(--screen-ink-2); font-variant-numeric: tabular-nums; }
+.perf__hud--meta { left: clamp(16px, 3vw, 32px); bottom: clamp(16px, 3vw, 28px); font-size: 1rem; }
+.perf__hud--meta strong { color: var(--ink); font-size: 1.25rem; font-weight: 800; }
+.perf__hud--keys { right: clamp(16px, 3vw, 32px); bottom: clamp(16px, 3vw, 28px); opacity: 0.7; }
+.perf__hud kbd { background: rgb(255 255 255 / 0.06); color: var(--screen-ink-2); box-shadow: none; margin: 0 1px; }
+.perf__exit { position: absolute; top: clamp(12px, 2vw, 24px); right: clamp(12px, 2vw, 24px); opacity: 0.6; }
+.perf__exit:hover, .perf__exit:focus-visible { opacity: 1; }
+@media (hover: none) { .perf__hud--keys { display: none; } }
+:root:has(.perf) { overflow: hidden; }
+/* lápis só ocupa espaço ao passar o mouse ou focar (cabeçalhos estreitos do Estúdio) */
+.strip__edit { width: 0; overflow: hidden; }
+.strip__head:hover .strip__edit, .strip__edit:focus-visible { width: 22px; }
+@media (hover: none) { .strip__edit { width: 22px; } }

@@ -7,6 +7,7 @@ import { Fader } from './Fader'
 import { FX_KNOBS } from './fx'
 import { MuteIcon, TrashIcon } from './Icons'
 import { Knob } from './Knob'
+import { NameIdeas, TrackName } from './TrackName'
 import { VuMeter } from './VuMeter'
 
 type Props = { state: EngineState; studio: boolean }
@@ -49,6 +50,7 @@ export function Mixer({ state, studio }: Props) {
         <DrumStrip index={drumsIndex} track={state.tracks[drumsIndex]} pattern={state.pattern} studio={studio} dimmed={anySolo && !state.tracks[drumsIndex].solo} />
         <MasterStrip state={state} />
       </div>
+      <NameIdeas />
     </section>
   )
 }
@@ -76,7 +78,7 @@ function DrumStrip({ index, track, pattern, studio, dimmed }: { index: number; t
     >
       <header className="strip__head">
         <span className="strip__num" aria-hidden="true">B</span>
-        <h2 className="strip__name" id="ch-drums-name">Bateria</h2>
+        <TrackName id="ch-drums-name" name={track.name} fallback="Bateria" onRename={(name) => engine.setTrack(index, { name })} />
         <span className="strip__status" role="status">{track.status === 'recorded' ? 'Padrão' : 'Vazia'}</span>
       </header>
 

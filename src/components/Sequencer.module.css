@@ -190,3 +190,11 @@
 @media (hover: none) {
   .key { display: none; }
 }
+
+/* REC pads: ligado, o botão acende em vermelho e os pads ganham um filete de gravação */
+.padRec { display: inline-flex; align-items: center; gap: 8px; }
+.padRecDot { width: 9px; height: 9px; border-radius: 50%; background: var(--screen-dim); transition: background 160ms var(--ease); }
+.padRec[aria-pressed='true'] { background: color-mix(in srgb, var(--rec) 22%, var(--screen-2)); box-shadow: inset 0 0 0 1px var(--rec); }
+.padRec[aria-pressed='true'] .padRecDot { background: var(--rec); box-shadow: 0 0 8px var(--rec); animation: rec-blink 1s steps(1, end) infinite; }
+@keyframes rec-blink { 50% { opacity: 0.3; } }
+.pads[data-rec] .pad { box-shadow: inset 0 0 0 1px var(--rec), inset 0 2px 0 rgb(255 255 255 / 0.06), 0 2px 4px rgb(0 0 0 / 0.4); }

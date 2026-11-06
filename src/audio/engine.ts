@@ -159,14 +159,16 @@ function applyMix(mix: Mix, s: EngineState, t: number | null) {
   set(mix.delay.delayTime, delayTime(s.bpm))
 }
 
-const pickParams = ({ volume, muted, solo, pan, filter, delay, reverb, nudge, overdubbing }: TrackState): TrackParams => ({
-  volume, muted, solo, pan, filter, delay, reverb, nudge, overdubbing,
+const pickParams = ({ name, volume, muted, solo, pan, filter, delay, reverb, nudge, overdubbing }: TrackState): TrackParams => ({
+  name, volume, muted, solo, pan, filter, delay, reverb, nudge, overdubbing,
 })
 
-function mergeParams(cur: TrackState, p: Partial<TrackParams>): TrackState {
+function mergeParams(cur: TrackState, p: Partial<TrackParams>, defaultName: string): TrackState {
   const mic = cur.kind === 'mic'
+  const name = typeof p.name === 'string' ? p.name.trim().slice(0, 24) || defaultName : cur.name
   return {
     ...cur,
+    name,
     volume: clamp(p.volume, 0, 1, cur.volume),
     muted: p.muted === undefined ? cur.muted : !!p.muted,
     solo: p.solo === undefined ? cur.solo : !!p.solo,
@@ -216,8 +218,9 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
   let lastToggle = 0
   let calib: Calib | null = null
 
-  const blank = (kind: TrackState['kind']): TrackState => ({
-    kind, status: 'empty', volume: 0.8, muted: false, solo: false, pan: 0, filter: 1, delay: 0, reverb: 0, nudge: 0, overdubbing: false, canUndo: false, revision: 0,
+  const defaultName = (i: number) => (i === D ? 'Bateria' : `Faixa ${i + 1}`)
+  const blank = (kind: TrackState['kind'], name: string): TrackState => ({
+    kind, name, status: 'empty', volume: 0.8, muted: false, solo: false, pan: 0, filter: 1, delay: 0, reverb: 0, nudge: 0, overdubbing: false, canUndo: false, revision: 0,
   })
   let state: EngineState = {
     status: 'idle',
@@ -229,7 +232,7 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
     playing: false,
     loopDuration: loopDuration(100, 2),
     masterVolume: 0.9,
-    tracks: Array.from({ length: N }, (_, i) => blank(i === D ? 'drums' : 'mic')),
+    tracks: Array.from({ length: N }, (_, i) => blank(i === D ? 'drums' : 'mic', defaultName(i))),
     pattern: emptyPattern(2),
   }
   const listeners = new Set<(s: EngineState) => void>()
@@ -739,7 +742,7 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
     setTrack(i, params) {
       if (!valid(i)) return
       const prev = state.tracks[i]
-      const next = mergeParams(prev, params)
+      const next = mergeParams(prev, params, defaultName(i))
       patchTrack(i, next)
       remix()
       if (next.nudge !== prev.nudge && state.playing && sources[i] && ctx) startSource(i, ctx.currentTime + 0.02)
@@ -869,7 +872,7 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
           buffers[i] = new AudioBuffer({ numberOfChannels: 1, length: audio.length, sampleRate: sr })
           buffers[i]!.copyToChannel(Float32Array.from(audio), 0)
         }
-        return { ...mergeParams(cur, t ?? {}), status: buffers[i] ? ('recorded' as const) : ('empty' as const), canUndo: false, revision: cur.revision + 1 }
+        return { ...mergeParams({ ...cur, name: defaultName(i) }, t ?? {}, defaultName(i)), status: buffers[i] ? ('recorded' as const) : ('empty' as const), canUndo: false, revision: cur.revision + 1 }
       })
       const pattern = resizePattern(
         DRUM_VOICES.map((_, v) => data.pattern?.[v] ?? []),

@@ -5,8 +5,19 @@ import { surprise } from './drumPresets'
 import { DiceIcon } from './Icons'
 import type { EngineState } from '../audio/types'
 
+const CAL_KEY = 'loopstudio.calOffered'
+const calOffered = () => {
+  try {
+    return localStorage.getItem(CAL_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
 // Onboarding sem modal: uma frase derivada do estado das faixas; some após 3 camadas
-export function GuideBar({ state }: { state: EngineState }) {
+export function GuideBar({ state, onCalibrate }: { state: EngineState; onCalibrate: () => void }) {
+  // a calibração é oferecida uma vez, logo após o 1º take
+  const [offered, setOffered] = useState(calOffered)
   const mics = state.tracks.slice(0, -1)
   const layers = mics.filter((t) => t.status === 'recorded').length
   const recording = mics.findIndex((t) => t.status === 'recording')
@@ -21,11 +32,26 @@ export function GuideBar({ state }: { state: EngineState }) {
   else if (layers === 2) msg = <>Solte a bateria: toque os pads <kbd>Q</kbd> <kbd>W</kbd> <kbd>E</kbd> <kbd>R</kbd> ou peça um “Surpreenda-me”.</>
 
   if (!msg || layers >= 3) return null
+  const offerCal = layers === 1 && recording < 0 && armed < 0 && !offered
+  function calibrate() {
+    setOffered(true)
+    try {
+      localStorage.setItem(CAL_KEY, '1')
+    } catch {
+      /* sem persistência */
+    }
+    onCalibrate()
+  }
   return (
-    <p className="guide" role="status">
+    <div className="guide">
       <span className="guide__dot" aria-hidden="true" />
-      {msg}
-    </p>
+      <p role="status">{msg}</p>
+      {offerCal && (
+        <button className="guide__cal" onClick={calibrate}>
+          Ficou desalinhado? Calibrar em 10 s
+        </button>
+      )}
+    </div>
   )
 }
 

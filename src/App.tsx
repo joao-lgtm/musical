@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
+import { Calibration } from './components/Calibration'
 import { CountIn } from './components/CountIn'
 import { GuideBar, SurpriseButton } from './components/GuideBar'
 import { Mixer } from './components/Mixer'
+import { Performance } from './components/Performance'
 import { ProjectBar } from './components/ProjectBar'
 import { Sequencer } from './components/Sequencer'
 import { Shortcuts } from './components/Shortcuts'
@@ -31,6 +33,25 @@ export default function App() {
   const ready = state.status === 'ready'
   const [studio, setStudio] = useState(loadStudio)
   const keysRef = useRef<HTMLDialogElement>(null)
+  const calRef = useRef<HTMLDialogElement>(null)
+  const [calibrating, setCalibrating] = useState(false)
+  const [perf, setPerf] = useState(false)
+
+  function enterPerf() {
+    setPerf(true)
+    // tela cheia quando o navegador deixa; sem ela o overlay cobre a janela
+    document.documentElement.requestFullscreen?.().catch(() => {})
+  }
+  function exitPerf() {
+    setPerf(false)
+    if (document.fullscreenElement) document.exitFullscreen().catch(() => {})
+  }
+  // saiu da tela cheia pelo navegador (Esc) → sai do modo performance
+  useEffect(() => {
+    const onFs = () => !document.fullscreenElement && setPerf(false)
+    document.addEventListener('fullscreenchange', onFs)
+    return () => document.removeEventListener('fullscreenchange', onFs)
+  }, [])
   const micCount = state.tracks.length - 1
 
   function chooseMode(on: boolean) {
@@ -42,12 +63,18 @@ export default function App() {
     }
   }
 
-  // Espaço = tocar/parar, 1–8 = gravar canal, ? = atalhos (Q W E R ficam com o Sequencer)
+  // Espaço = tocar/parar, 1–8 = gravar, P = performance, ? = atalhos (Q W E R ficam com o Sequencer)
   useEffect(() => {
-    if (!ready) return
+    if (!ready || calibrating) return
     const down = (e: KeyboardEvent) => {
+      if (document.querySelector('dialog[open]')) return
       if (e.ctrlKey || e.metaKey || e.altKey || focusIn(e.target, FIELD)) return
-      if (e.key === '?') {
+      if (e.key === 'Escape' && perf) {
+        exitPerf()
+      } else if ((e.key === 'p' || e.key === 'P') && !e.repeat) {
+        if (perf) exitPerf()
+        else enterPerf()
+      } else if (e.key === '?') {
         e.preventDefault()
         keysRef.current?.showModal()
       } else if (e.code === 'Space') {
@@ -63,7 +90,7 @@ export default function App() {
     }
     window.addEventListener('keydown', down)
     return () => window.removeEventListener('keydown', down)
-  }, [engine, ready, micCount])
+  }, [engine, ready, micCount, calibrating, perf])
 
   if (!started)
     return (
@@ -74,7 +101,7 @@ export default function App() {
 
   return (
     <EngineContext value={engine}>
-      <main className="desk" data-studio={studio || undefined}>
+      <main className="desk" data-studio={studio || undefined} inert={perf}>
         <header className="desk__top">
           <h1 className="brand">
             <span className="brand__mark" aria-hidden="true"><i /><i /><i /><i /></span>
@@ -85,6 +112,9 @@ export default function App() {
               <button className="seg__btn" aria-pressed={!studio} onClick={() => chooseMode(false)}>Simples</button>
               <button className="seg__btn" aria-pressed={studio} onClick={() => chooseMode(true)}>Estúdio</button>
             </div>
+            <button className="btn btn--sm btn--perf" onClick={enterPerf} aria-keyshortcuts="P">
+              Performance <kbd>P</kbd>
+            </button>
             <button className="btn btn--sm btn--ghost" onClick={() => keysRef.current?.showModal()} aria-keyshortcuts="?">
               Atalhos <kbd>?</kbd>
             </button>
@@ -106,7 +136,7 @@ export default function App() {
         <Transport state={state} />
         <ProjectBar />
         <div className="cue">
-          <GuideBar state={state} />
+          <GuideBar state={state} onCalibrate={() => calRef.current?.showModal()} />
           <SurpriseButton />
         </div>
         <Mixer state={state} studio={studio} />
@@ -127,13 +157,18 @@ export default function App() {
             />
             <output className="adv__val">{state.latencyOffset > 0 ? '+' : ''}{state.latencyOffset} ms</output>
           </label>
+          <button className="btn btn--sm adv__cal" onClick={() => calRef.current?.showModal()}>
+            Calibrar com palmas
+          </button>
           <p className="adv__help" id="lat-help">
             Se as gravações ficam atrasadas em relação ao metrônomo, aumente o valor (positivo puxa a gravação para mais cedo). Vale para as próximas gravações.
           </p>
         </details>
       </main>
+      {perf && <Performance state={state} onExit={exitPerf} />}
       <CountIn />
       <Shortcuts ref={keysRef} />
+      <Calibration ref={calRef} onBusy={setCalibrating} />
     </EngineContext>
   )
 }

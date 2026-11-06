@@ -23,9 +23,20 @@ export function Sequencer() {
   const root = useRef<HTMLDivElement>(null)
   const pads = useRef<(HTMLButtonElement | null)[]>([])
   const lit = useRef(-1)
+  const [padRec, setPadRec] = useState(false)
 
   const hit = (v: number) => {
     engine.triggerDrum(DRUM_VOICES[v])
+    // REC pads: quantiza ao passo mais próximo do que está sendo ouvido (getPosition já desconta a latência de saída)
+    const pos = engine.getPosition()
+    if (padRec && pos.playing && !pos.countIn && steps > 0) {
+      const step = Math.round(pos.phase * steps) % steps
+      if (!engine.getState().pattern[v][step]) engine.toggleStep(v, step)
+      root.current?.querySelector(`[data-voice="${v}"] > [data-step="${step}"]`)?.animate(
+        [{ boxShadow: '0 0 0 3px #fff, 0 0 24px var(--c)' }, { boxShadow: '0 0 0 0 transparent' }],
+        { duration: 450, easing: 'cubic-bezier(0.16, 1, 0.3, 1)' },
+      )
+    }
     pads.current[v]?.animate(
       [{ transform: 'scale(0.94)', filter: 'brightness(1.6)' }, { transform: 'none', filter: 'none' }],
       { duration: 220, easing: 'cubic-bezier(0.16, 1, 0.3, 1)' },
@@ -46,12 +57,17 @@ export function Sequencer() {
     lit.current = step
   })
 
-  // Q W E R tocam as vozes (Espaço e números ficam com o App)
+  // Q W E R tocam as vozes, T liga o REC pads (Espaço e números ficam com o App)
   useEffect(() => {
     if (!ready) return
     const down = (e: KeyboardEvent) => {
+      if (document.querySelector('dialog[open]')) return
       if (e.repeat || e.ctrlKey || e.metaKey || e.altKey) return
       if (e.target instanceof Element && e.target.closest(FIELD)) return
+      if (e.code === 'KeyT') {
+        e.preventDefault()
+        return setPadRec((on) => !on)
+      }
       const v = ['KeyQ', 'KeyW', 'KeyE', 'KeyR'].indexOf(e.code)
       if (v < 0) return
       e.preventDefault()
@@ -89,6 +105,11 @@ export function Sequencer() {
             </svg>
             Surpreenda-me
           </button>
+          <button type="button" className={`${s.btn} ${s.padRec}`} aria-pressed={padRec} onClick={() => setPadRec((on) => !on)} disabled={!ready} title={state.playing ? undefined : 'Dê play para gravar os pads'}>
+            <span className={s.padRecDot} aria-hidden="true" />
+            REC pads
+            <kbd className={s.key} aria-hidden="true">T</kbd>
+          </button>
           <button type="button" className={s.btn} onClick={() => engine.setPattern(toPattern(DEMO_PRESET))} disabled={!ready}>
             Padrão exemplo
           </button>
@@ -98,7 +119,7 @@ export function Sequencer() {
         </div>
       </header>
 
-      <div className={s.pads} role="group" aria-label="Pads ao vivo">
+      <div className={s.pads} role="group" aria-label="Pads ao vivo" data-rec={padRec || undefined}>
         {DRUM_VOICES.map((voice, v) => (
           <button
             key={voice}
