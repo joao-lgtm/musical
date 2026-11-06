@@ -255,12 +255,10 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
     const my = ++gen
     let c: AudioContext | null = null
     let s: MediaStream | null = null
-    let done = false
+    // Idempotente por recurso: pode rodar de novo quando o stream chega depois do dispose.
     const abandon = () => {
-      if (done) return
-      done = true
       releaseStream(s)
-      if (c && c.state !== 'closed') void c.close()
+      if (c && c.state !== 'closed') c.close().catch(() => {})
     }
     pendingCleanup = abandon
     const lost = () => {
