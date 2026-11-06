@@ -46,6 +46,7 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
   let stream: MediaStream | null = null
   let worklet: AudioWorkletNode | null = null
   let initPromise: Promise<void> | null = null
+  let pendingCleanup: (() => void) | null = null // libera recursos de um init ainda pendente
   let gen = 0 // geração do init: tentativas obsoletas só limpam os próprios recursos
   let inputLatency = 0
   let gains: GainNode[] = []
@@ -216,6 +217,8 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
   // Libera áudio e microfone; mantém buffers gravados. Invalida qualquer init em andamento.
   function teardown() {
     gen++
+    pendingCleanup?.()
+    pendingCleanup = null
     stopAll()
     releaseStream(stream)
     stream = null
@@ -240,13 +243,30 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
   }
   const resume = () => ctx!.resume().catch(fail)
 
+  // Navegador suspendeu o contexto: para o transporte e tenta voltar em até 1s.
+  async function onSuspended(ac: AudioContext) {
+    stopAll()
+    const timeout = new Promise((r) => setTimeout(r, 1000))
+    await Promise.race([ac.resume(), timeout]).catch(() => {})
+    if (ctx === ac && ac.state !== 'running') fail(new Error('Áudio pausado pelo navegador'))
+  }
+
   async function start() {
     const my = ++gen
     let c: AudioContext | null = null
     let s: MediaStream | null = null
+    let done = false
     const abandon = () => {
+      if (done) return
+      done = true
       releaseStream(s)
       if (c && c.state !== 'closed') void c.close()
+    }
+    pendingCleanup = abandon
+    const lost = () => {
+      if (my !== gen) return
+      teardown()
+      set({ status: 'error', error: 'Microfone desconectado' })
     }
     set({ status: 'initializing', error: null })
     try {
@@ -255,6 +275,8 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
         audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 1 },
       })
       if (my !== gen) return abandon()
+      const track = s.getAudioTracks()[0]
+      if (track) track.onended = lost
       await c.audioWorklet.addModule(workletUrl)
       if (my !== gen) return abandon()
       const node = new AudioWorkletNode(c, 'recorder', { channelCount: 1, channelCountMode: 'explicit' })
@@ -270,15 +292,15 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
       })
       await c.resume()
       if (my !== gen) return abandon()
+      if (track?.readyState !== 'live') throw new Error('Microfone desconectado')
 
       // commit: daqui em diante os recursos são do engine
-      const track = s.getAudioTracks()[0]
-      inputLatency = (track?.getSettings() as { latency?: number } | undefined)?.latency ?? 0
-      if (track) track.onended = () => fail(new Error('Microfone desconectado'))
+      pendingCleanup = null
+      inputLatency = (track.getSettings() as { latency?: number }).latency ?? 0
       const ac = c
       ac.onstatechange = () => {
         const st = ac.state as string
-        if (ready() && (st === 'suspended' || st === 'interrupted')) void resume()
+        if (ready() && (st === 'suspended' || st === 'interrupted')) void onSuspended(ac)
       }
       ctx = c
       stream = s
@@ -288,7 +310,10 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
       set({ status: 'ready' })
     } catch (e) {
       abandon()
-      if (my === gen) set({ status: 'error', error: errMsg(e) })
+      if (my === gen) {
+        pendingCleanup = null
+        set({ status: 'error', error: errMsg(e) })
+      }
       throw e
     }
   }
