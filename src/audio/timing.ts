@@ -119,10 +119,18 @@ export function calibrationPlan(now: number, bpm: number, clicks: number, lead =
   return { clickTimes, start: first - lead, end: first + (clicks - 1) * bd + tail }
 }
 
-/** renderMix: 1 loop de pre-roll + `loops` loops; recorta os `loops` finais (em frames). */
-export function renderWindow(loops: number, dur: number, sampleRate: number) {
+export const REVERB_SECONDS = 2.5
+export const DELAY_FEEDBACK = 0.35
+
+/** Tempo até as caudas de FX caírem abaixo de -60 dB (reverb pela IR, delay pelo feedback). */
+export const fxTail = (bpm: number) =>
+  Math.max(REVERB_SECONDS, (delayTime(bpm) * Math.log(0.001)) / Math.log(DELAY_FEEDBACK))
+
+/** renderMix: pre-roll de loops inteiros cobrindo `tail` (FX em regime) + `loops` loops; recorta os finais (em frames). */
+export function renderWindow(loops: number, dur: number, sampleRate: number, tail = 0) {
   const l = Math.max(1, Math.floor(loops))
-  const start = Math.round(dur * sampleRate)
+  const warm = Math.max(1, Math.ceil(tail / dur))
+  const start = Math.round(warm * dur * sampleRate)
   const length = Math.round(l * dur * sampleRate)
   return { loops: l, start, length, total: start + length }
 }

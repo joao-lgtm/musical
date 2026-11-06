@@ -10,6 +10,7 @@ import {
   overdubMix,
   recordStart,
   renderWindow,
+  fxTail,
   resample,
   resizePattern,
   stepDuration,
@@ -142,5 +143,15 @@ describe('timing', () => {
   it('renderWindow: pre-roll de 1 loop, recorta os loops finais', () => {
     expect(renderWindow(2, 2, 48000)).toEqual({ loops: 2, start: 96000, length: 192000, total: 288000 })
     expect(renderWindow(0, 1.5, 44100)).toEqual({ loops: 1, start: 66150, length: 66150, total: 132300 })
+  })
+
+  it('renderWindow: pre-roll cobre a cauda de FX em loops inteiros', () => {
+    // 1 compasso a 180 bpm = 1.333s; cauda ≥ 2.5s → 2 loops de aquecimento
+    const dur = loopDuration(180, 1)
+    const tail = fxTail(180)
+    expect(tail).toBeGreaterThanOrEqual(2.5)
+    const w = renderWindow(1, dur, 48000, tail)
+    expect(w.start).toBe(Math.round(Math.ceil(tail / dur) * dur * 48000))
+    expect(w.start / 48000).toBeGreaterThanOrEqual(tail)
   })
 })

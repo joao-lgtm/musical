@@ -15,6 +15,9 @@ import {
   positionAt,
   recordStart,
   renderWindow,
+  fxTail,
+  REVERB_SECONDS,
+  DELAY_FEEDBACK,
   resample,
   resizePattern,
   stepDuration,
@@ -100,7 +103,7 @@ const irCache = new Map<number, AudioBuffer>()
 function impulse(sampleRate: number) {
   let ir = irCache.get(sampleRate)
   if (ir) return ir
-  const length = Math.round(2.5 * sampleRate)
+  const length = Math.round(REVERB_SECONDS * sampleRate)
   ir = new AudioBuffer({ numberOfChannels: 2, length, sampleRate })
   for (let c = 0; c < 2; c++) {
     const d = ir.getChannelData(c)
@@ -117,7 +120,7 @@ function buildMix(c: BaseAudioContext, count: number): Mix {
   const tone = c.createBiquadFilter()
   tone.frequency.value = 3000
   const fb = c.createGain()
-  fb.gain.value = 0.35
+  fb.gain.value = DELAY_FEEDBACK
   delay.connect(tone).connect(fb).connect(delay)
   tone.connect(master)
   const verb = c.createConvolver()
@@ -803,8 +806,8 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
       const s = state
       const sr = ctx!.sampleRate
       const dur = s.loopDuration
-      // 1 loop de pre-roll: caudas de FX já presentes, o arquivo emenda sem costura
-      const win = renderWindow(loops, dur, sr)
+      // pre-roll até as caudas de FX entrarem em regime: o arquivo emenda sem costura
+      const win = renderWindow(loops, dur, sr, fxTail(s.bpm))
       const off = new OfflineAudioContext(2, win.total, sr)
       const m = buildMix(off, N)
       applyMix(m, s, null)
