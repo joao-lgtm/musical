@@ -43,3 +43,10 @@ export const captureLatency = (outputLatency: number, inputLatency: number, offs
 
 /** Instante que está sendo ouvido agora. */
 export const heardTime = (currentTime: number, outputLatency: number) => currentTime - outputLatency
+
+/**
+ * Virada de loop onde a gravação pode começar: a captura só liga ao armar, então o frame
+ * inicial (início + latency) precisa estar pelo menos `margin` no futuro e o início também.
+ */
+export const recordStart = (now: number, t0: number, dur: number, latency: number, margin = 0.05) =>
+  nextLoopStart(now + Math.max(0, -latency) + margin, t0, dur)

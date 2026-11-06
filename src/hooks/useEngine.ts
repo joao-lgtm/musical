@@ -1,27 +1,36 @@
-import { useEffect, useRef, useSyncExternalStore } from 'react'
+import { createContext, useContext, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { createEngine } from '../audio/engine'
+import type { LoopEngine } from '../audio/types'
 
 export const TRACKS = 4
-// uma instância por página, criada fora do render; init() só roda no gesto do usuário
-export const engine = createEngine({ tracks: TRACKS })
 
-export function useEngineState() {
-  return useSyncExternalStore(engine.subscribe, engine.getState)
+export const EngineContext = createContext<LoopEngine | null>(null)
+
+export function useEngine() {
+  const engine = useContext(EngineContext)
+  if (!engine) throw new Error('useEngine fora de <EngineContext>')
+  return engine
 }
 
 /**
- * Libera o motor só no unmount real. O StrictMode desmonta/remonta em seguida
- * de forma síncrona, então adiamos e conferimos se voltou a montar.
+ * Uma instância por montagem do App; init() só roda no gesto do usuário.
+ * O StrictMode desmonta/remonta em seguida: o dispose é adiado e cancelado se remontar.
+ * Remontagem real cria outra instância (useState lazy roda de novo).
  */
-let mounts = 0
-export function useEngineLifetime() {
+export function useOwnEngine() {
+  const [engine] = useState(() => createEngine({ tracks: TRACKS }))
+  const pending = useRef<ReturnType<typeof setTimeout>>(undefined)
   useEffect(() => {
-    mounts++
+    clearTimeout(pending.current) // remontagem do StrictMode: cancela o dispose agendado
     return () => {
-      mounts--
-      setTimeout(() => mounts === 0 && engine.dispose())
+      pending.current = setTimeout(() => engine.dispose())
     }
-  }, [])
+  }, [engine])
+  return engine
+}
+
+export function useEngineState(engine: LoopEngine) {
+  return useSyncExternalStore(engine.subscribe, engine.getState)
 }
 
 /** Chama fn a cada frame (leituras baratas: posição, picos) sem re-render. */

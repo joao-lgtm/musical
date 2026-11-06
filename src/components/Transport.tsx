@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react'
 import type { EngineState } from '../audio/types'
-import { engine } from '../hooks/useEngine'
+import { useEngine } from '../hooks/useEngine'
 import { BeatIndicator } from './BeatIndicator'
 import { LockIcon, MetronomeIcon, PlayIcon, StopIcon, TrashIcon } from './Icons'
 
 const BARS = [1, 2, 4] as const
 
 export function Transport({ state }: { state: EngineState }) {
+  const engine = useEngine()
   const locked = state.tracks.some((t) => t.status !== 'empty')
   const hasAudio = state.tracks.some((t) => t.status !== 'empty')
   const [confirming, setConfirming] = useState(false)
@@ -83,7 +84,7 @@ export function Transport({ state }: { state: EngineState }) {
       <BeatIndicator bars={state.bars} />
 
       <p id="lock-note" className="transport__note" hidden={!locked}>
-        <LockIcon size={12} /> Andamento e compassos travados porque já há faixa gravada. Apague tudo para mudar.
+        <LockIcon size={12} /> Andamento e compassos travados enquanto houver faixa armada, gravando ou gravada. Apague tudo para mudar.
       </p>
     </section>
   )

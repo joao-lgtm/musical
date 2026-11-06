@@ -7,8 +7,8 @@ import {
   isAccent,
   loopDuration,
   loopOffset,
-  nextLoopStart,
   positionAt,
+  recordStart,
   timeToFrame,
 } from './timing'
 import workletUrl from './recorder.worklet.ts?worker&url'
@@ -17,11 +17,28 @@ interface Rec {
   start: number // instante agendado (relógio do ctx)
   startFrame: number // frame do mic correspondente, já com latência
   data: Float32Array
+  filled: number // amostras capturadas a partir de startFrame
 }
 
 const LOOKAHEAD = 0.1
 const TICK_MS = 25
 const STOPPED: Position = { playing: false, phase: 0, beat: 0, countIn: false }
+const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e))
+
+function computePeaks(ch: Float32Array, count: number, total: number) {
+  const out = new Float32Array(count)
+  const step = total / count
+  for (let b = 0; b < count; b++) {
+    let max = 0
+    const end = Math.min(ch.length, Math.floor((b + 1) * step))
+    for (let k = Math.floor(b * step); k < end; k++) {
+      const v = Math.abs(ch[k])
+      if (v > max) max = v
+    }
+    out[b] = max
+  }
+  return out
+}
 
 export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
   const n = opts.tracks ?? 4
@@ -29,13 +46,15 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
   let stream: MediaStream | null = null
   let worklet: AudioWorkletNode | null = null
   let initPromise: Promise<void> | null = null
+  let gen = 0 // geração do init: tentativas obsoletas só limpam os próprios recursos
   let inputLatency = 0
-  const gains: GainNode[] = []
+  let gains: GainNode[] = []
   // AudioBuffer não pertence a um contexto: sobrevive a reinit após erro de mic
   const buffers: (AudioBuffer | null)[] = Array(n).fill(null)
   const sources: (AudioBufferSourceNode | null)[] = Array(n).fill(null)
   const recs: (Rec | null)[] = Array(n).fill(null)
   const peaks: ({ count: number; data: Float32Array } | null)[] = Array(n).fill(null)
+  const clicks = new Set<OscillatorNode>()
   let t0 = 0
   let nextBeat = 0
   let timer: ReturnType<typeof setInterval> | undefined
@@ -65,7 +84,7 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
   const ready = () => state.status === 'ready'
   const valid = (i: number) => ready() && Number.isInteger(i) && i >= 0 && i < n
   const locked = () => state.tracks.some((t) => t.status !== 'empty')
-  const outLatency = () => (ctx ? ctx.outputLatency || ctx.baseLatency || 0 : 0)
+  const outLatency = () => (ctx ? (ctx.baseLatency || 0) + (ctx.outputLatency || 0) : 0)
 
   function applyGain(i: number) {
     if (!ctx) return
@@ -100,8 +119,21 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
     g.gain.setValueAtTime(accent ? 0.6 : 0.35, t)
     g.gain.exponentialRampToValueAtTime(0.001, t + 0.03)
     osc.connect(g).connect(c.destination)
+    osc.onended = () => {
+      clicks.delete(osc)
+      g.disconnect()
+    }
     osc.start(t)
     osc.stop(t + 0.04)
+    clicks.add(osc)
+  }
+  function stopClicks() {
+    clicks.forEach((osc) => {
+      osc.onended = null
+      osc.stop()
+      osc.disconnect()
+    })
+    clicks.clear()
   }
 
   function tick() {
@@ -144,7 +176,10 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
       const off = frame - r.startFrame
       const from = Math.max(0, -off)
       const to = Math.min(data.length, len - off)
-      if (to > from) r.data.set(data.subarray(from, to), off + from)
+      if (to > from) {
+        r.data.set(data.subarray(from, to), off + from)
+        r.filled = off + to
+      }
       if (off + data.length >= len) finish(i, r)
     })
   }
@@ -170,6 +205,7 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
   function stopAll() {
     clearInterval(timer)
     timer = undefined
+    stopClicks()
     for (let i = 0; i < n; i++) {
       stopSource(i)
       if (recs[i]) cancelRec(i)
@@ -177,55 +213,82 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
     if (state.playing) set({ playing: false })
   }
 
-  // Libera áudio e microfone; mantém buffers gravados.
+  // Libera áudio e microfone; mantém buffers gravados. Invalida qualquer init em andamento.
   function teardown() {
+    gen++
     stopAll()
-    stream?.getTracks().forEach((t) => {
+    releaseStream(stream)
+    stream = null
+    worklet = null
+    if (ctx) {
+      ctx.onstatechange = null
+      if (ctx.state !== 'closed') void ctx.close()
+    }
+    ctx = null
+  }
+  function releaseStream(s: MediaStream | null) {
+    s?.getTracks().forEach((t) => {
       t.onended = null
       t.stop()
     })
-    stream = null
-    worklet = null
-    if (ctx && ctx.state !== 'closed') void ctx.close()
-    ctx = null
   }
 
+  function fail(e: unknown) {
+    if (!ready()) return
+    teardown()
+    set({ status: 'error', error: errMsg(e) })
+  }
+  const resume = () => ctx!.resume().catch(fail)
+
   async function start() {
+    const my = ++gen
+    let c: AudioContext | null = null
+    let s: MediaStream | null = null
+    const abandon = () => {
+      releaseStream(s)
+      if (c && c.state !== 'closed') void c.close()
+    }
     set({ status: 'initializing', error: null })
     try {
-      const c = new AudioContext({ latencyHint: 'interactive' })
-      ctx = c
-      stream = await navigator.mediaDevices.getUserMedia({
+      c = new AudioContext({ latencyHint: 'interactive' })
+      s = await navigator.mediaDevices.getUserMedia({
         audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 1 },
       })
-      if (state.status !== 'initializing') return teardown() // dispose durante o init
-      const track = stream.getAudioTracks()[0]
-      inputLatency = (track?.getSettings() as { latency?: number } | undefined)?.latency ?? 0
-      if (track) {
-        track.onended = () => {
-          teardown()
-          set({ status: 'error', error: 'Microfone desconectado' })
-        }
-      }
+      if (my !== gen) return abandon()
       await c.audioWorklet.addModule(workletUrl)
-      if (state.status !== 'initializing') return teardown()
-      worklet = new AudioWorkletNode(c, 'recorder', { channelCount: 1, channelCountMode: 'explicit' })
-      worklet.port.onmessage = (e) => onBlock(e.data)
-      c.createMediaStreamSource(stream).connect(worklet)
-      worklet.connect(c.destination) // saída silenciosa; só garante que o nó seja processado
+      if (my !== gen) return abandon()
+      const node = new AudioWorkletNode(c, 'recorder', { channelCount: 1, channelCountMode: 'explicit' })
+      node.port.onmessage = (e) => onBlock(e.data)
+      c.createMediaStreamSource(s).connect(node)
+      node.connect(c.destination) // saída silenciosa; só garante que o nó seja processado
       const master = c.createGain()
       master.connect(c.destination)
-      for (let i = 0; i < n; i++) {
-        gains[i] = c.createGain()
-        gains[i].connect(master)
-        applyGain(i)
-      }
+      const g = Array.from({ length: n }, () => {
+        const node = c!.createGain()
+        node.connect(master)
+        return node
+      })
       await c.resume()
-      if (state.status !== 'initializing') return teardown()
+      if (my !== gen) return abandon()
+
+      // commit: daqui em diante os recursos são do engine
+      const track = s.getAudioTracks()[0]
+      inputLatency = (track?.getSettings() as { latency?: number } | undefined)?.latency ?? 0
+      if (track) track.onended = () => fail(new Error('Microfone desconectado'))
+      const ac = c
+      ac.onstatechange = () => {
+        const st = ac.state as string
+        if (ready() && (st === 'suspended' || st === 'interrupted')) void resume()
+      }
+      ctx = c
+      stream = s
+      worklet = node
+      gains = g
+      for (let i = 0; i < n; i++) applyGain(i)
       set({ status: 'ready' })
     } catch (e) {
-      teardown()
-      if (state.status === 'initializing') set({ status: 'error', error: e instanceof Error ? e.message : String(e) })
+      abandon()
+      if (my === gen) set({ status: 'error', error: errMsg(e) })
       throw e
     }
   }
@@ -236,6 +299,7 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
     set({ ...patch, loopDuration: loopDuration(next.bpm, next.bars) })
     // sem faixas, só o metrônomo depende de t0: reancora a grade
     if (state.playing && ctx) {
+      stopClicks()
       t0 = ctx.currentTime + 0.05
       nextBeat = 0
     }
@@ -275,7 +339,7 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
 
     play() {
       if (!ready() || state.playing) return
-      void ctx!.resume()
+      void resume()
       startTransport(false)
     },
     stop() {
@@ -285,16 +349,18 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
     record(i) {
       if (!valid(i)) return
       const c = ctx!
-      void c.resume()
+      void resume()
       if (recs[i]) return cancelRec(i)
       dropTrack(i) // descarta o take antigo ao armar (evita vazar no microfone)
       if (!state.playing) startTransport(true)
       const sr = c.sampleRate
-      const start = nextLoopStart(c.currentTime, t0, state.loopDuration)
+      const latency = captureLatency(outLatency(), inputLatency, state.latencyOffset)
+      const start = recordStart(c.currentTime, t0, state.loopDuration, latency)
       recs[i] = {
         start,
-        startFrame: timeToFrame(start, sr, captureLatency(outLatency(), inputLatency, state.latencyOffset)),
+        startFrame: timeToFrame(start, sr, latency),
         data: new Float32Array(Math.ceil(state.loopDuration * sr)),
+        filled: 0,
       }
       syncWorklet()
       setTrack(i, { status: 'armed' })
@@ -325,23 +391,17 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
     },
 
     getPeaks(i, count) {
-      const buf = i >= 0 && i < n ? buffers[i] : null
-      if (!buf || count <= 0) return null
+      if (!(i >= 0 && i < n) || count <= 0) return null
+      const r = recs[i]
+      // gravando: picos parciais sobre a duração total, resto zero (sem cache, cresce ao vivo)
+      if (r) return r.filled > 0 ? computePeaks(r.data.subarray(0, r.filled), count, r.data.length) : null
+      const buf = buffers[i]
+      if (!buf) return null
       const cached = peaks[i]
       if (cached?.count === count) return cached.data
-      const ch = buf.getChannelData(0)
-      const out = new Float32Array(count)
-      const step = ch.length / count
-      for (let b = 0; b < count; b++) {
-        let max = 0
-        for (let k = Math.floor(b * step), end = Math.floor((b + 1) * step); k < end; k++) {
-          const v = Math.abs(ch[k])
-          if (v > max) max = v
-        }
-        out[b] = max
-      }
-      peaks[i] = { count, data: out }
-      return out
+      const data = computePeaks(buf.getChannelData(0), count, buf.length)
+      peaks[i] = { count, data }
+      return data
     },
 
     getState: () => state,

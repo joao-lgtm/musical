@@ -1,6 +1,6 @@
 import type { CSSProperties } from 'react'
 import type { TrackState } from '../audio/types'
-import { engine } from '../hooks/useEngine'
+import { useEngine } from '../hooks/useEngine'
 import { MuteIcon, RecIcon, TrashIcon } from './Icons'
 import { Waveform } from './Waveform'
 
@@ -12,6 +12,7 @@ const STATUS_TEXT = {
 } as const
 
 export function Channel({ index, track, transportPlaying }: { index: number; track: TrackState; transportPlaying: boolean }) {
+  const engine = useEngine()
   const n = index + 1
   const { status, volume, muted } = track
   const rec = status === 'armed' || status === 'recording'

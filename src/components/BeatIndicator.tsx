@@ -1,8 +1,9 @@
 import { useRef } from 'react'
-import { engine, useFrame } from '../hooks/useEngine'
+import { useEngine, useFrame } from '../hooks/useEngine'
 
 // LEDs de tempo + leitura "compasso.tempo"; atualizado por rAF, sem re-render
 export function BeatIndicator({ bars }: { bars: number }) {
+  const engine = useEngine()
   const rootRef = useRef<HTMLDivElement>(null)
   const readRef = useRef<HTMLSpanElement>(null)
   const last = useRef('')

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { captureLatency, heardTime, isAccent, loopDuration, loopOffset, nextLoopStart, positionAt, timeToFrame } from './timing'
+import { captureLatency, heardTime, isAccent, recordStart, loopDuration, loopOffset, nextLoopStart, positionAt, timeToFrame } from './timing'
 
 describe('timing', () => {
   it('loopDuration', () => {
@@ -48,6 +48,23 @@ describe('timing', () => {
     expect(captureLatency(0.01, 0, -10)).toBeCloseTo(0)
     const sr = 48000
     expect(timeToFrame(2, sr, captureLatency(0.01, 0, 50))).toBeGreaterThan(timeToFrame(2, sr, captureLatency(0.01, 0, 0)))
+  })
+
+  it('recordStart pula a virada sem margem para a captura', () => {
+    // loop 2s, t0 = 10
+    expect(recordStart(10.5, 10, 2, 0.02)).toBe(12)
+    expect(recordStart(11.97, 10, 2, 0.02)).toBe(14) // a menos de 50ms da virada
+    expect(recordStart(11.8, 10, 2, -0.2)).toBe(14) // offset negativo: frame inicial cairia no passado
+    expect(recordStart(11.7, 10, 2, -0.2)).toBe(12)
+    expect(recordStart(5, 10, 2, 0)).toBe(10) // contagem: t0 ainda no futuro
+    // invariante: início e frame inicial no futuro
+    for (const lat of [-0.2, -0.05, 0, 0.03, 0.25]) {
+      for (let now = 10; now < 16; now += 0.013) {
+        const s = recordStart(now, 10, 2, lat)
+        expect(s).toBeGreaterThan(now)
+        expect(s + lat).toBeGreaterThanOrEqual(now + 0.05 - 1e-9)
+      }
+    }
   })
 
   it('posição ouvida desconta a latência de saída', () => {

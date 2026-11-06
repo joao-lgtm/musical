@@ -1,9 +1,10 @@
 import type { CSSProperties } from 'react'
 import type { EngineState } from '../audio/types'
-import { engine } from '../hooks/useEngine'
+import { useEngine } from '../hooks/useEngine'
 import { MicIcon } from './Icons'
 
 export function StartScreen({ state }: { state: EngineState }) {
+  const engine = useEngine()
   const busy = state.status === 'initializing'
   const failed = state.status === 'error'
 

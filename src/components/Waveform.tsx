@@ -1,10 +1,11 @@
 import { useEffect, useRef } from 'react'
 import type { TrackStatus } from '../audio/types'
-import { engine, useFrame } from '../hooks/useEngine'
+import { useEngine, useFrame } from '../hooks/useEngine'
 
 const BAR = 3 // px por barra (2 de traço + 1 de folga)
 
 export function Waveform({ track, status, muted }: { track: number; status: TrackStatus; muted: boolean }) {
+  const engine = useEngine()
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const peaks = useRef<Float32Array | null>(null)
   const size = useRef({ w: 0, h: 0, dpr: 1 })
@@ -30,11 +31,11 @@ export function Waveform({ track, status, muted }: { track: number; status: Trac
     })
     ro.observe(c)
     return () => ro.disconnect()
-  }, [track])
+  }, [engine, track])
 
   useEffect(() => {
     peaks.current = engine.getPeaks(track, Math.max(8, Math.floor(size.current.w / BAR)))
-  }, [track, status])
+  }, [engine, track, status])
 
   useFrame(() => {
     const c = canvasRef.current

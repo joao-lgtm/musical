@@ -2,14 +2,15 @@ import { useEffect, useState } from 'react'
 import { Channel } from './components/Channel'
 import { StartScreen } from './components/StartScreen'
 import { Transport } from './components/Transport'
-import { engine, TRACKS, useEngineLifetime, useEngineState } from './hooks/useEngine'
+import { EngineContext, TRACKS, useEngineState, useOwnEngine } from './hooks/useEngine'
 
-const isField = (t: EventTarget | null) =>
-  t instanceof HTMLElement && (t.matches('input, textarea, select') || t.isContentEditable)
+const FIELD = 'input, textarea, select, [contenteditable]:not([contenteditable="false"])'
+const INTERACTIVE = `button, summary, a[href], [role=button], [role=slider], ${FIELD}`
+const focusIn = (t: EventTarget | null, sel: string) => t instanceof Element && t.closest(sel) !== null
 
 export default function App() {
-  const state = useEngineState()
-  useEngineLifetime()
+  const engine = useOwnEngine()
+  const state = useEngineState(engine)
   // depois de pronto uma vez, erros (ex.: mic desconectado) aparecem na mesa, não na tela inicial
   const [started, setStarted] = useState(false)
   if (state.status === 'ready' && !started) setStarted(true)
@@ -19,8 +20,10 @@ export default function App() {
   useEffect(() => {
     if (!ready) return
     const down = (e: KeyboardEvent) => {
-      if (e.ctrlKey || e.metaKey || e.altKey || isField(e.target)) return
+      if (e.ctrlKey || e.metaKey || e.altKey || focusIn(e.target, FIELD)) return
+      // Espaço só controla o transporte com foco em área neutra; em controles ele os ativa
       if (e.code === 'Space') {
+        if (focusIn(e.target, INTERACTIVE)) return
         e.preventDefault()
         if (e.repeat) return
         if (engine.getState().playing) engine.stop()
@@ -29,21 +32,14 @@ export default function App() {
         engine.record(Number(e.key) - 1)
       }
     }
-    // impede que o Espaço também "clique" o botão focado
-    const up = (e: KeyboardEvent) => {
-      if (e.code === 'Space' && e.target instanceof HTMLButtonElement) e.preventDefault()
-    }
     window.addEventListener('keydown', down)
-    window.addEventListener('keyup', up)
-    return () => {
-      window.removeEventListener('keydown', down)
-      window.removeEventListener('keyup', up)
-    }
-  }, [ready])
+    return () => window.removeEventListener('keydown', down)
+  }, [engine, ready])
 
-  if (!started) return <StartScreen state={state} />
+  if (!started) return <EngineContext value={engine}><StartScreen state={state} /></EngineContext>
 
   return (
+    <EngineContext value={engine}>
     <main className="desk">
       <header className="desk__top">
         <h1 className="brand">
@@ -95,5 +91,6 @@ export default function App() {
         </p>
       </details>
     </main>
+    </EngineContext>
   )
 }
