@@ -156,7 +156,7 @@ kbd {
 .desk {
   max-width: 1680px;
   margin: 0 auto;
-  padding: 18px clamp(16px, 2.4vw, 32px) 48px;
+  padding: clamp(22px, 3vw, 36px) clamp(16px, 2.4vw, 32px) 48px;
   display: grid;
   gap: 14px;
   min-width: 0;
@@ -550,4 +550,20 @@ input[type='range']::-moz-range-thumb { width: 16px; height: 24px; border: 0; bo
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; transition-duration: 0.001ms !important; }
+}
+
+/* faixa-guia + "Surpreenda-me" compacto */
+.cue { display: flex; align-items: stretch; gap: 10px; }
+.cue .guide { flex: 1; min-width: 0; }
+.cue__surprise {
+  margin-left: auto; align-self: center; min-height: 44px;
+  background: linear-gradient(100deg, var(--ch1-lit), var(--ch7-lit) 55%, var(--ch3-lit));
+  color: var(--on-color); font-weight: 800; box-shadow: 0 6px 20px -8px var(--ch7-lit);
+}
+.cue__surprise:hover:not(:disabled) { background: linear-gradient(100deg, var(--ch1-lit), var(--ch7-lit) 55%, var(--ch3-lit)); filter: brightness(1.08); }
+@media (max-width: 720px) {
+  .cue { flex-direction: column; }
+  .cue__surprise { margin-left: 0; align-self: stretch; }
+  /* Estúdio no celular: canais vazios além do próximo ficam só com cabeçalho + Gravar */
+  .strip[data-collapsible] > :not(.strip__head):not(.rec) { display: none; }
 }

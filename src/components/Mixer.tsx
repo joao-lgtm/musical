@@ -42,6 +42,7 @@ export function Mixer({ state, studio }: Props) {
             transportPlaying={state.playing}
             studio={studio}
             hint={hint === i}
+            collapsible={t.status === 'empty' && i !== firstFree}
             dimmed={anySolo && !t.solo}
           />
         ))}

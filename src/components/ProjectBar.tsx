@@ -39,9 +39,21 @@ export function ProjectBar() {
 
   const dialog = useRef<HTMLDialogElement>(null)
   const recorder = useRef<MediaRecorder | null>(null)
+  const releaseRec = useRef<(() => void) | null>(null)
+  const alive = useRef(true)
+  const [picking, setPickingState] = useState(false)
+  const pickingRef = useRef(false)
+  const setPicking = (v: boolean) => { pickingRef.current = v; setPickingState(v) }
 
-  // Ao desmontar, encerra a gravação (o onstop libera as tracks)
-  useEffect(() => () => recorder.current?.stop(), [])
+  // Montagem: respostas tardias (seletor de tela, render) checam alive. Ao desmontar, para gravação e tracks sem baixar.
+  useEffect(() => {
+    alive.current = true
+    return () => {
+      alive.current = false
+      recorder.current?.stop()
+      releaseRec.current?.()
+    }
+  }, [])
 
   // Uma ação por vez; erros viram mensagem inline
   const run = async (kind: Exclude<Busy, null>, fail: string, fn: () => Promise<void>) => {
@@ -105,11 +117,14 @@ export function ProjectBar() {
   const exportWav = () =>
     run('wav', 'Não foi possível exportar o WAV', async () => {
       const buf = await engine.renderMix(loops)
+      if (!alive.current) return
       download(audioBufferToWav(buf), `loop-studio-${state.bpm}bpm.wav`)
       setNote('WAV exportado')
     })
 
   const startVideo = async () => {
+    if (pickingRef.current || recorder.current) return
+    setPicking(true)
     setError(null)
     setNote('')
     const audio = engine.getOutputStream()?.getAudioTracks().map((t) => t.clone()) ?? []
@@ -118,11 +133,15 @@ export function ProjectBar() {
       screen = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false, preferCurrentTab: true } as DisplayMediaStreamOptions)
     } catch (e) {
       audio.forEach((t) => t.stop())
+      setPicking(false)
       // NotAllowedError = o usuário cancelou o seletor; não é erro
       if (!(e instanceof DOMException && e.name === 'NotAllowedError')) setError(`Não foi possível capturar a tela: ${msg(e)}`)
       return
     }
+    setPicking(false)
     const stream = new MediaStream([...screen.getVideoTracks(), ...audio])
+    // Desmontou com o seletor aberto: libera tudo e não grava
+    if (!alive.current) return stream.getTracks().forEach((t) => t.stop())
     const mimeType = MIME.find((m) => MediaRecorder.isTypeSupported(m)) ?? ''
     const chunks: Blob[] = []
     let rec: MediaRecorder
@@ -135,11 +154,16 @@ export function ProjectBar() {
     }
     const started = Date.now()
     const tick = setInterval(() => setRecSec(Math.floor((Date.now() - started) / 1000)), 250)
-    rec.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data) }
-    rec.onstop = () => {
+    releaseRec.current = () => {
       clearInterval(tick)
       stream.getTracks().forEach((t) => t.stop())
+    }
+    rec.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data) }
+    rec.onstop = () => {
+      releaseRec.current?.()
+      releaseRec.current = null
       recorder.current = null
+      if (!alive.current) return
       setRecSec(null)
       const type = rec.mimeType || mimeType || 'video/webm'
       if (chunks.length) download(new Blob(chunks, { type }), `loop-studio-${state.bpm}bpm.${type.includes('mp4') ? 'mp4' : 'webm'}`)
@@ -198,7 +222,7 @@ export function ProjectBar() {
             <span className={s.recStop}>Parar</span>
           </button>
         ) : (
-          <button type="button" className={s.btn} onClick={startVideo} disabled={!ready}>
+          <button type="button" className={s.btn} onClick={startVideo} disabled={!ready || picking} aria-busy={picking}>
             <span className={s.recIdle} aria-hidden="true" />
             Gravar vídeo
           </button>

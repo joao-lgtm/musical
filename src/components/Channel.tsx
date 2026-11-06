@@ -17,11 +17,13 @@ type Props = {
   /** REC pulsando: é a próxima ação sugerida pela faixa-guia */
   hint: boolean
   dimmed: boolean
+  /** vazio e além do próximo livre: no celular mostra só cabeçalho + Gravar */
+  collapsible?: boolean
 }
 
 const STATUS = { empty: 'Vazia', armed: 'Armada', recording: 'Gravando', recorded: 'Em loop' } as const
 
-export function Channel({ index, track, transportPlaying, studio, hint, dimmed }: Props) {
+export function Channel({ index, track, transportPlaying, studio, hint, dimmed, collapsible }: Props) {
   const engine = useEngine()
   const n = index + 1
   const { status, muted, solo, overdubbing } = track
@@ -48,9 +50,11 @@ export function Channel({ index, track, transportPlaying, studio, hint, dimmed }
   useFrame(() => {
     if (status !== 'armed' || !armBar.current || !armText.current) return
     const p = readFrame(engine).pos
-    const left = p.countIn ? 1 : 1 - p.phase
-    armBar.current.style.transform = `scaleX(${left})`
-    const txt = p.countIn ? 'Na contagem…' : `Começa em ${(left * engine.getState().loopDuration).toFixed(1).replace('.', ',')} s`
+    // o motor sabe quando a gravação começa de fato (pode pular uma virada por margem)
+    const secs = Math.max(0, engine.getArmedIn(index) ?? 0)
+    const loop = engine.getState().loopDuration || 1
+    armBar.current.style.transform = `scaleX(${Math.min(1, secs / loop)})`
+    const txt = `${p.countIn ? 'Contagem · ' : 'Começa em '}${secs.toFixed(1).replace('.', ',')} s`
     if (txt !== lastText.current) armText.current.textContent = lastText.current = txt
   })
 
@@ -64,6 +68,7 @@ export function Channel({ index, track, transportPlaying, studio, hint, dimmed }
       data-status={status}
       data-muted={muted || undefined}
       data-dim={dimmed || undefined}
+      data-collapsible={collapsible || undefined}
       style={{ '--ch': `var(--ch${n})`, '--ch-lit': `var(--ch${n}-lit)` } as CSSProperties}
       aria-labelledby={`ch${n}-name`}
     >
@@ -74,7 +79,7 @@ export function Channel({ index, track, transportPlaying, studio, hint, dimmed }
       </header>
 
       <div className="screen">
-        <Waveform track={index} status={status} muted={muted} />
+        <Waveform track={index} status={status} muted={muted} revision={track.revision} />
         {status === 'empty' && <span className="screen__hint">Vazia</span>}
         {status === 'recording' && <span className="screen__rec"><i /> Gravando</span>}
         {status === 'armed' && (

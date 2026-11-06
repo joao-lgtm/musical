@@ -39,24 +39,28 @@ export function detectOnsets(
 
 /**
  * Atraso mediano clique→palma. offsetMs soma ao latencyOffset do motor (positivo = gravação atrasada).
- * null se menos da metade dos cliques tiver palma correspondente.
+ * Cada onset casa com no máximo um clique, e a janela não passa do próximo clique + 50 ms.
+ * null se só metade ou menos dos cliques casar (ex.: palmas a cada 2 cliques em BPM alto
+ * são ambíguas) ou se jitterMs > maxJitterMs (indica casamento errado).
  */
 export function estimateLatency(
   clickTimes: number[],
   onsetTimes: number[],
-  opts: { maxLagMs?: number } = {},
+  opts: { maxLagMs?: number; maxJitterMs?: number } = {},
 ): { offsetMs: number; matched: number; jitterMs: number } | null {
   const maxLag = (opts.maxLagMs ?? 350) / 1000
+  const clicks = [...clickTimes].sort((a, b) => a - b)
+  const onsets = [...onsetTimes].sort((a, b) => a - b)
   const lags: number[] = []
-  for (const c of clickTimes) {
-    const o = onsetTimes.find((t) => t >= c - 0.05 && t <= c + maxLag)
-    if (o !== undefined) lags.push((o - c) * 1000)
-  }
-  if (!lags.length || lags.length < clickTimes.length / 2) return null
+  let j = 0 // onsets antes de j já foram usados ou ficaram para trás
+  clicks.forEach((c, k) => {
+    const end = Math.min(c + maxLag, (clicks[k + 1] ?? Infinity) + 0.05)
+    while (j < onsets.length && onsets[j] < c - 0.05) j++
+    if (j < onsets.length && onsets[j] <= end) lags.push((onsets[j++] - c) * 1000)
+  })
+  if (!lags.length || lags.length <= clicks.length / 2) return null
   const m = median(lags)
-  return {
-    offsetMs: Math.max(-200, Math.min(200, m)),
-    matched: lags.length,
-    jitterMs: median(lags.map((l) => Math.abs(l - m))),
-  }
+  const jitterMs = median(lags.map((l) => Math.abs(l - m)))
+  if (jitterMs > (opts.maxJitterMs ?? 25)) return null
+  return { offsetMs: Math.max(-200, Math.min(200, m)), matched: lags.length, jitterMs }
 }

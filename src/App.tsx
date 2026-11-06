@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { CountIn } from './components/CountIn'
-import { GuideBar } from './components/GuideBar'
+import { GuideBar, SurpriseButton } from './components/GuideBar'
 import { Mixer } from './components/Mixer'
 import { ProjectBar } from './components/ProjectBar'
 import { Sequencer } from './components/Sequencer'
@@ -105,7 +105,10 @@ export default function App() {
 
         <Transport state={state} />
         <ProjectBar />
-        <GuideBar state={state} />
+        <div className="cue">
+          <GuideBar state={state} />
+          <SurpriseButton />
+        </div>
         <Mixer state={state} studio={studio} />
         <Sequencer />
 

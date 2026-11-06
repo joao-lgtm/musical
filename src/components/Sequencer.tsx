@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { DRUM_VOICES, STEPS_PER_BAR, type DrumVoice } from '../audio/types'
 import { useEngine, useEngineState, useFrame } from '../hooks/useEngine'
-import { DEMO_PRESET, DRUM_PRESETS, toPattern } from './drumPresets'
+import { DEMO_PRESET, surprise, toPattern } from './drumPresets'
 import s from './Sequencer.module.css'
 
 const VOICES: Record<DrumVoice, { name: string; key: string }> = {
@@ -62,18 +62,13 @@ export function Sequencer() {
   }, [ready])
 
   const [picked, setPicked] = useState<string | null>(null)
-  const last = useRef(-1)
+  const last = useRef<string | undefined>(undefined)
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined)
   useEffect(() => () => clearTimeout(timer.current), [])
 
-  // Sorteia um preset diferente do anterior e já põe para tocar
-  const surprise = () => {
-    let i = Math.floor(Math.random() * DRUM_PRESETS.length)
-    if (i === last.current) i = (i + 1) % DRUM_PRESETS.length
-    last.current = i
-    engine.setPattern(toPattern(DRUM_PRESETS[i]))
-    if (!engine.getState().playing) engine.play()
-    setPicked(DRUM_PRESETS[i].name)
+  const onSurprise = () => {
+    last.current = surprise(engine, last.current)
+    setPicked(last.current)
     clearTimeout(timer.current)
     timer.current = setTimeout(() => setPicked(null), 2000)
   }
@@ -84,7 +79,7 @@ export function Sequencer() {
         <h2 id="seq-title" className={s.title}>Bateria</h2>
         <div className={s.actions}>
           <span className={s.picked} role="status">{picked && <>Tocando <b>{picked}</b></>}</span>
-          <button type="button" className={s.surprise} onClick={surprise} disabled={!ready}>
+          <button type="button" className={s.surprise} onClick={onSurprise} disabled={!ready}>
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
               <rect x="3.5" y="3.5" width="17" height="17" rx="3" />
               <circle cx="8.5" cy="8.5" r="1.3" fill="currentColor" />

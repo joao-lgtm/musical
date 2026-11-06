@@ -1,3 +1,5 @@
+import type { LoopEngine } from '../audio/types'
+
 // Presets de 1 compasso (16 semicolcheias). 'x' = passo ligado. Ordem: bumbo, caixa, chimbal, palmas.
 export interface DrumPreset {
   name: string
@@ -19,3 +21,12 @@ export const DEMO_PRESET: DrumPreset = {
 }
 
 export const toPattern = (p: DrumPreset) => p.rows.map((r) => [...r].map((c) => c === 'x'))
+
+/** Sorteia um preset diferente de `lastName`, aplica no motor, toca se estiver parado e retorna o nome. */
+export function surprise(engine: LoopEngine, lastName?: string): string {
+  const pool = DRUM_PRESETS.filter((p) => p.name !== lastName)
+  const pick = pool[Math.floor(Math.random() * pool.length)]
+  engine.setPattern(toPattern(pick))
+  if (!engine.getState().playing) engine.play()
+  return pick.name
+}

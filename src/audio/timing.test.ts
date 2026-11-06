@@ -9,6 +9,7 @@ import {
   nudgedOffset,
   overdubMix,
   recordStart,
+  renderWindow,
   resample,
   resizePattern,
   stepDuration,
@@ -136,5 +137,10 @@ describe('timing', () => {
     expect(p.clickTimes).toEqual([12.1, 12.6, 13.1, 13.6])
     expect(p.start).toBeCloseTo(11.8)
     expect(p.end).toBeCloseTo(14.1)
+  })
+
+  it('renderWindow: pre-roll de 1 loop, recorta os loops finais', () => {
+    expect(renderWindow(2, 2, 48000)).toEqual({ loops: 2, start: 96000, length: 192000, total: 288000 })
+    expect(renderWindow(0, 1.5, 44100)).toEqual({ loops: 1, start: 66150, length: 66150, total: 132300 })
   })
 })

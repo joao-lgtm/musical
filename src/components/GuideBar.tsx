@@ -1,4 +1,8 @@
+import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
+import { useEngine, useEngineState } from '../hooks/useEngine'
+import { surprise } from './drumPresets'
+import { DiceIcon } from './Icons'
 import type { EngineState } from '../audio/types'
 
 // Onboarding sem modal: uma frase derivada do estado das faixas; some após 3 camadas
@@ -22,5 +26,29 @@ export function GuideBar({ state }: { state: EngineState }) {
       <span className="guide__dot" aria-hidden="true" />
       {msg}
     </p>
+  )
+}
+
+// Atalho compacto para o "Surpreenda-me" perto do topo (no celular o Sequencer fica no fim da página)
+export function SurpriseButton() {
+  const engine = useEngine()
+  const ready = useEngineState(engine).status === 'ready'
+  const last = useRef<string | undefined>(undefined)
+  const [picked, setPicked] = useState<string | null>(null)
+  const timer = useRef<ReturnType<typeof setTimeout>>(undefined)
+  useEffect(() => () => clearTimeout(timer.current), [])
+
+  function go() {
+    last.current = surprise(engine, last.current)
+    setPicked(last.current)
+    clearTimeout(timer.current)
+    timer.current = setTimeout(() => setPicked(null), 2000)
+  }
+
+  return (
+    <button className="btn btn--sm cue__surprise" onClick={go} disabled={!ready}>
+      <DiceIcon size={16} />
+      <span aria-live="polite">{picked ? `Bateria: ${picked}` : 'Surpreenda-me'}</span>
+    </button>
   )
 }

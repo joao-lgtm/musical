@@ -4,7 +4,7 @@ import { readFrame, useEngine, useFrame } from '../hooks/useEngine'
 
 const BAR = 3 // px por barra (2 de traço + 1 de folga)
 
-export function Waveform({ track, status, muted }: { track: number; status: TrackStatus; muted: boolean }) {
+export function Waveform({ track, status, muted, revision }: { track: number; status: TrackStatus; muted: boolean; revision: number }) {
   const engine = useEngine()
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const peaks = useRef<Float32Array | null>(null)
@@ -35,7 +35,7 @@ export function Waveform({ track, status, muted }: { track: number; status: Trac
 
   useEffect(() => {
     peaks.current = engine.getPeaks(track, Math.max(8, Math.floor(size.current.w / BAR)))
-  }, [engine, track, status])
+  }, [engine, track, status, revision])
 
   useFrame(() => {
     const c = canvasRef.current

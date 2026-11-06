@@ -118,3 +118,11 @@ export function calibrationPlan(now: number, bpm: number, clicks: number, lead =
   const clickTimes = Array.from({ length: clicks }, (_, k) => first + k * bd)
   return { clickTimes, start: first - lead, end: first + (clicks - 1) * bd + tail }
 }
+
+/** renderMix: 1 loop de pre-roll + `loops` loops; recorta os `loops` finais (em frames). */
+export function renderWindow(loops: number, dur: number, sampleRate: number) {
+  const l = Math.max(1, Math.floor(loops))
+  const start = Math.round(dur * sampleRate)
+  const length = Math.round(l * dur * sampleRate)
+  return { loops: l, start, length, total: start + length }
+}

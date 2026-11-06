@@ -14,6 +14,7 @@ import {
   overdubMix,
   positionAt,
   recordStart,
+  renderWindow,
   resample,
   resizePattern,
   stepDuration,
@@ -196,6 +197,7 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
   // AudioBuffer não pertence a um contexto: sobrevive a reinit após erro de mic
   const buffers: (AudioBuffer | null)[] = Array(N).fill(null)
   const sources: (AudioBufferSourceNode | null)[] = Array(N).fill(null)
+  const retiring = Array.from({ length: N }, () => new Set<AudioBufferSourceNode>()) // trocados, ainda soando
   const recs: (Rec | null)[] = Array(N).fill(null)
   const peaks: ({ count: number; data: Float32Array } | null)[] = Array(N).fill(null)
   const clicks = new Set<OscillatorNode>()
@@ -212,7 +214,7 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
   let calib: Calib | null = null
 
   const blank = (kind: TrackState['kind']): TrackState => ({
-    kind, status: 'empty', volume: 0.8, muted: false, solo: false, pan: 0, filter: 1, delay: 0, reverb: 0, nudge: 0, overdubbing: false, canUndo: false,
+    kind, status: 'empty', volume: 0.8, muted: false, solo: false, pan: 0, filter: 1, delay: 0, reverb: 0, nudge: 0, overdubbing: false, canUndo: false, revision: 0,
   })
   let state: EngineState = {
     status: 'idle',
@@ -241,7 +243,7 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
   /** Novo padrão + status do canal drums numa notificação só. */
   function setPatternState(pattern: boolean[][], extra: Partial<EngineState> = {}) {
     const tracks = state.tracks.slice()
-    tracks[D] = { ...tracks[D], status: hasSteps(pattern) ? 'recorded' : 'empty', canUndo: undoPattern !== null }
+    tracks[D] = { ...tracks[D], status: hasSteps(pattern) ? 'recorded' : 'empty', canUndo: undoPattern !== null, revision: tracks[D].revision + 1 }
     set({ ...extra, pattern, tracks })
   }
   /** Guarda o padrão para undo; toggles seguidos (< 1s) ficam num snapshot só. */
@@ -255,14 +257,20 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
   const valid = (i: number) => ready() && Number.isInteger(i) && i >= 0 && i < N
   const locked = () => state.tracks.some((t) => t.kind === 'mic' && t.status !== 'empty')
   const outLatency = () => (ctx ? (ctx.baseLatency || 0) + (ctx.outputLatency || 0) : 0)
+  const rev = (i: number) => state.tracks[i].revision + 1
   const remix = () => ctx && mix && applyMix(mix, state, ctx.currentTime)
 
   function startSource(i: number, when: number) {
     const old = sources[i]
     when = Math.max(when, t0)
     if (old) {
-      old.onended = () => old.disconnect()
-      old.stop(when) // troca sem buraco
+      // troca sem buraco; fica "em retirada" até parar, para stop/clear alcançá-lo
+      retiring[i].add(old)
+      old.onended = () => {
+        retiring[i].delete(old)
+        old.disconnect()
+      }
+      old.stop(when)
     }
     sources[i] = null
     const buf = buffers[i]
@@ -276,8 +284,17 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
     sources[i] = src
   }
   function stopSource(i: number) {
-    sources[i]?.stop()
-    sources[i]?.disconnect()
+    const all = sources[i] ? [sources[i]!, ...retiring[i]] : [...retiring[i]]
+    all.forEach((s) => {
+      s.onended = null
+      try {
+        s.stop()
+      } catch {
+        // já parado
+      }
+      s.disconnect()
+    })
+    retiring[i].clear()
     sources[i] = null
   }
 
@@ -406,7 +423,7 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
     recs[i] = null
     syncWorklet()
     startSource(i, c.currentTime + 0.02)
-    patchTrack(i, { status: 'recorded', canUndo: undoTake[i] !== undefined })
+    patchTrack(i, { status: 'recorded', canUndo: undoTake[i] !== undefined, revision: rev(i) })
   }
 
   function dropTrack(i: number) {
@@ -474,12 +491,10 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
     const my = ++gen
     let c: AudioContext | null = null
     let s: MediaStream | null = null
-    let done = false
+    // idempotente por recurso: chamada de novo após o getUserMedia tardio libera o stream
     const abandon = () => {
-      if (done) return
-      done = true
       releaseStream(s)
-      if (c && c.state !== 'closed') void c.close()
+      if (c && c.state !== 'closed') c.close().catch(() => {})
     }
     pendingCleanup = abandon
     const lost = () => {
@@ -572,7 +587,7 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
     }
     if (buffers[i]) undoTake[i] = buffers[i]
     dropTrack(i)
-    patchTrack(i, { status: 'empty', canUndo: undoTake[i] !== undefined })
+    patchTrack(i, { status: 'empty', canUndo: undoTake[i] !== undefined, revision: rev(i) })
   }
 
   function undo(i: number) {
@@ -591,7 +606,7 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
     peaks[i] = null
     if (state.playing && ctx) startSource(i, ctx.currentTime + 0.02)
     else stopSource(i)
-    patchTrack(i, { status: snap ? 'recorded' : 'empty', canUndo: false })
+    patchTrack(i, { status: snap ? 'recorded' : 'empty', canUndo: false, revision: rev(i) })
   }
 
   async function calibrate(opts: { clicks?: number; onClick?: (i: number) => void } = {}): Promise<CalibrationResult | null> {
@@ -695,7 +710,7 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
         overdub,
       }
       syncWorklet()
-      patchTrack(i, { status: 'armed', canUndo: undoTake[i] !== undefined })
+      patchTrack(i, { status: 'armed', canUndo: undoTake[i] !== undefined, revision: overdub ? state.tracks[i].revision : rev(i) })
     },
 
     clear,
@@ -711,6 +726,7 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
         tracks: state.tracks.map((t, i) => ({
           ...t,
           status: 'empty' as const,
+          revision: t.revision + 1,
           canUndo: i === D ? undoPattern !== null : undoTake[i] !== undefined,
         })),
         pattern: emptyPattern(state.bars),
@@ -743,6 +759,12 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
       if (!ready() || !DRUM_VOICES.includes(voice)) return
       void resume()
       playDrum(ctx!, mix!.ch[D].input, voice, ctx!.currentTime)
+    },
+
+    getArmedIn(i) {
+      const r = i >= 0 && i < N ? recs[i] : null
+      if (!r || !ctx || state.tracks[i].status !== 'armed') return null
+      return Math.max(0, r.start - heardTime(ctx.currentTime, outLatency()))
     },
 
     getPosition() {
@@ -781,8 +803,9 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
       const s = state
       const sr = ctx!.sampleRate
       const dur = s.loopDuration
-      const total = Math.max(1, Math.floor(loops)) * dur
-      const off = new OfflineAudioContext(2, Math.ceil(total * sr), sr)
+      // 1 loop de pre-roll: caudas de FX já presentes, o arquivo emenda sem costura
+      const win = renderWindow(loops, dur, sr)
+      const off = new OfflineAudioContext(2, win.total, sr)
       const m = buildMix(off, N)
       applyMix(m, s, null)
       m.master.connect(off.destination)
@@ -798,12 +821,15 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
       }
       const sd = stepDuration(s.bpm)
       const steps = s.bars * STEPS_PER_BAR
-      for (let k = 0; k * sd < total; k++) {
+      for (let k = 0; k < (win.loops + 1) * steps; k++) {
         s.pattern.forEach((row, v) => {
           if (row[k % steps]) playDrum(off, m.ch[D].input, DRUM_VOICES[v], k * sd)
         })
       }
-      return off.startRendering()
+      const full = await off.startRendering()
+      const out = new AudioBuffer({ numberOfChannels: 2, length: win.length, sampleRate: sr })
+      for (let c = 0; c < 2; c++) out.copyToChannel(full.getChannelData(c).subarray(win.start, win.start + win.length), c)
+      return out
     },
 
     exportProject(): ProjectData {
@@ -840,7 +866,7 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
           buffers[i] = new AudioBuffer({ numberOfChannels: 1, length: audio.length, sampleRate: sr })
           buffers[i]!.copyToChannel(Float32Array.from(audio), 0)
         }
-        return { ...mergeParams(cur, t ?? {}), status: buffers[i] ? ('recorded' as const) : ('empty' as const), canUndo: false }
+        return { ...mergeParams(cur, t ?? {}), status: buffers[i] ? ('recorded' as const) : ('empty' as const), canUndo: false, revision: cur.revision + 1 }
       })
       const pattern = resizePattern(
         DRUM_VOICES.map((_, v) => data.pattern?.[v] ?? []),

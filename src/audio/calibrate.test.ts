@@ -60,6 +60,26 @@ describe('calibrate', () => {
     expect(detectOnsets(signal([1, 1.03]), SR)).toHaveLength(1)
   })
 
+  it('BPM 180: onset não casa com dois cliques; metade ambígua → null', () => {
+    const fast = Array.from({ length: 8 }, (_, i) => i / 3)
+    const on = fast.filter((_, i) => i % 2 === 0).map((c) => c + 0.3)
+    expect(estimateLatency(fast, on)).toBeNull()
+  })
+
+  it('BPM 180 com atraso real de 70 ms', () => {
+    const fast = Array.from({ length: 8 }, (_, i) => 0.5 + i / 3)
+    const on = detectOnsets(signal(fast.map((c) => c + 0.07 + jit() * 0.005)), SR)
+    const r = estimateLatency(fast, on)!
+    expect(r.matched).toBe(8)
+    expect(Math.abs(r.offsetMs - 70)).toBeLessThan(3)
+  })
+
+  it('jitter alto → null', () => {
+    const lagged = clicks.map((c, i) => c + (i % 2 ? 0.02 : 0.15))
+    expect(estimateLatency(clicks, lagged)).toBeNull()
+    expect(estimateLatency(clicks, lagged, { maxJitterMs: 100 })).not.toBeNull()
+  })
+
   it('clamp ±200', () => {
     expect(estimateLatency([0], [0.3])!.offsetMs).toBe(200)
   })

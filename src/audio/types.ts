@@ -28,6 +28,8 @@ export interface TrackState {
   readonly overdubbing: boolean
   /** Há um estado anterior (1 nível) para undo(track). */
   readonly canUndo: boolean
+  /** Incrementa sempre que o áudio/padrão do canal muda (take, overdub, undo, import) — gatilho para reler picos. */
+  readonly revision: number
 }
 
 /** Resultado da calibração: offsetMs já aplicado em latencyOffset. */
@@ -128,6 +130,8 @@ export interface LoopEngine {
   /** Leitura barata, para requestAnimationFrame. */
   getPosition(): Position
   getPeaks(track: number, n: number): Float32Array | null
+  /** Segundos (no relógio ouvido) até a gravação do canal armado começar de fato; null se não armado. Para rAF. */
+  getArmedIn(track: number): number | null
   /** Nível atual 0..1 já em escala de meter (pico em dB, -48..0 dB → 0..1) por canal (tracks.length valores) + master no fim, para VU meters. */
   getLevels(): Float32Array
   /** Mixagem final em tempo real, para gravar vídeo com áudio (MediaRecorder). */
