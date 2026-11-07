@@ -6,7 +6,7 @@ function state(): EngineState {
   return {
     status: 'ready', error: null, mic: 'off', micError: null, micTrack: null,
     bpm: 120, bars: 1, metronome: false, latencyOffset: 0, playing: false,
-    loopDuration: 2, masterVolume: 1, key: 'C',
+    loopDuration: 2, masterVolume: 1, key: 'C', scale: 'pentatonic',
     isolateRecording: false, canRestoreTrack: false,
     pattern: Array.from({ length: 4 }, () => Array<boolean>(16).fill(false)),
     tracks: [{
@@ -49,6 +49,14 @@ describe('hasDraftContentChanged', () => {
   it('detecta mudanca do tom do projeto', () => {
     const base = state()
     expect(hasDraftContentChanged(base, { ...base, key: 'D' })).toBe(true)
+  })
+
+  it('detecta mudanca de escala sem mudar o tom', () => {
+    const base = state()
+    const major = { ...base, scale: 'major' as const }
+    expect(hasDraftContentChanged(base, major)).toBe(true)
+    expect(hasDraftContentChanged(major, base)).toBe(true)
+    expect(hasDraftContentChanged(base, { ...base })).toBe(false)
   })
 
   it('detecta revision mesmo sem mudar os params', () => {

@@ -48,6 +48,21 @@ export function GuideBar({ state, onCalibrate }: { state: EngineState; onCalibra
     const timer = setTimeout(() => setStyleTip(null), 12000)
     return () => clearTimeout(timer)
   }, [styleTip])
+  const previousScale = useRef(state.scale)
+  const majorTipShown = useRef(false)
+  const [majorTip, setMajorTip] = useState(false)
+  useEffect(() => {
+    if (state.scale === 'major' && previousScale.current !== 'major' && !majorTipShown.current) {
+      majorTipShown.current = true
+      setMajorTip(true)
+    }
+    previousScale.current = state.scale
+  }, [state.scale])
+  useEffect(() => {
+    if (!majorTip) return
+    const timer = setTimeout(() => setMajorTip(false), 12000)
+    return () => clearTimeout(timer)
+  }, [majorTip])
   const guide = useRef<HTMLDivElement>(null)
   const pendingFocus = useRef({ wasInside: false, target: 0 })
   const lastPreset = useRef<string | undefined>(undefined)
@@ -164,7 +179,7 @@ export function GuideBar({ state, onCalibrate }: { state: EngineState; onCalibra
 
   const isolated = state.isolateRecording && active >= 0
   const suggestOcarina = layers === 0 || state.mic === 'denied' || state.mic === 'missing'
-  if (!msg && !suggestOcarina && !transformTip && !isolated && !styleTip) return null
+  if (!msg && !suggestOcarina && !transformTip && !isolated && !styleTip && !majorTip) return null
   const offerCal = mics.some((track) => track.status === 'recorded' && track.source === 'mic') && !micUnavailable && state.mic !== 'requesting' && !silentWarning && layers === 1 && recording < 0 && armed < 0 && !offered
   function calibrate() {
     setOffered(true)
@@ -186,6 +201,7 @@ export function GuideBar({ state, onCalibrate }: { state: EngineState; onCalibra
         {label}
       </button>}
       {showingExport && <button type="button" className="btn btn--ghost guide__dismiss" disabled={exportCard.busy} onClick={exportCard.dismiss}>Agora não</button>}
+      {majorTip && <p className="guide__secondary" role="status">Escala maior: agora tem todas as notas do tom (Fá e Si inclusive).</p>}
       {styleTip && <p className="guide__secondary" role="status">Estilo {styleTip.name}: a faixa 1 já está como {INSTRUMENT_LABEL[styleTip.instrument]}. Toque os pads ou troque para Microfone.</p>}
       {isolated && <p className="guide__secondary">Gravando isolada: você ouve só esta faixa e o metrônomo.</p>}
       {transformTip && <p className="guide__secondary">Cantou uma melodia? Experimente Transformar → Em ocarina. Dica: cante uma nota de cada vez, tipo “du du du”.</p>}

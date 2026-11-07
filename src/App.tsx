@@ -1,10 +1,10 @@
-import { isInstrument } from './audio/types'
+import { PAD_COUNT, isInstrument } from './audio/types'
 import { useEffect, useRef, useState } from 'react'
 import { Calibration } from './components/Calibration'
 import { CountIn } from './components/CountIn'
 import { GuideBar, SurpriseButton } from './components/GuideBar'
 import { Mixer } from './components/Mixer'
-import { lastInstrument, rememberInstrument } from './components/NotePads'
+import { NOTE_CODES, lastInstrument, rememberInstrument } from './components/NotePads'
 import { Performance } from './components/Performance'
 import { ProjectBar } from './components/ProjectBar'
 import { Coach } from './components/Coach'
@@ -117,8 +117,8 @@ export default function App() {
       held.clear()
     }
     const down = (e: KeyboardEvent) => {
-      const degree = 'asdfghjk'.indexOf(e.key.toLowerCase())
-      if (degree < 0 || e.repeat || held.has(e.code) || e.ctrlKey || e.metaKey || e.altKey ||
+      const degree = NOTE_CODES.indexOf(e.code)
+      if (degree < 0 || degree >= PAD_COUNT[engine.getState().scale] || e.repeat || held.has(e.code) || e.ctrlKey || e.metaKey || e.altKey ||
           focusIn(e.target, FIELD) || document.querySelector('dialog[open]')) return
       const tracks = engine.getState().tracks
       const active = tracks.findIndex((t) => isInstrument(t.source) && (t.status === 'armed' || t.status === 'recording'))
@@ -151,7 +151,7 @@ export default function App() {
       window.removeEventListener('blur', release)
       document.removeEventListener('visibilitychange', visibility)
     }
-  }, [engine, ready, calibrating])
+  }, [engine, ready, calibrating, state.scale, state.key])
 
   // Espaço = tocar/parar, 1–8 = gravar, P = performance, ? = atalhos (Q W E R ficam com o Sequencer)
   useEffect(() => {

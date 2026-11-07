@@ -816,6 +816,52 @@ describe('audio sem permissao de microfone', () => {
       expect(rendered.mock.calls[0][0][0]).toMatchObject({ time: 0, midi: 60 })
     })
 
+    it('escala maior em C inclui Fa4 e Mi5; pentatonica ignora grau 8', async () => {
+      await engine.init()
+      engine.setTrack(0, { source: 'ocarina' })
+      expect(engine.getState().scale).toBe('pentatonic')
+      engine.noteOn(0, 8)
+      expect(voices).not.toHaveBeenCalled()
+      engine.setScale('major')
+      engine.noteOn(0, 3)
+      engine.noteOn(0, 9)
+      engine.noteOn(0, 10)
+      expect(voices.mock.calls.map((call) => call[2])).toEqual([65, 76])
+    })
+
+    it('trocar escala corta vozes com rampa, notifica e preserva take', async () => {
+      await engine.init()
+      engine.applyTake(0, Float32Array.of(0.2), { source: 'ocarina' })
+      const audio = engine.getTakeAudio(0)
+      engine.noteOn(0, 0)
+      const changed = vi.fn()
+      const unsubscribe = engine.subscribe(changed)
+      engine.setScale('major')
+      expect(voices.mock.results[0].value.stop).toHaveBeenLastCalledWith(0, 0.06)
+      expect(changed).toHaveBeenCalledTimes(1)
+      expect(engine.getTakeAudio(0)).toEqual(audio)
+      engine.setScale('major')
+      expect(changed).toHaveBeenCalledTimes(1)
+      unsubscribe()
+    })
+
+    it('exporta escala e importa escala salva, antiga ou invalida', async () => {
+      await engine.init()
+      engine.setScale('major')
+      const project = engine.exportProject()
+      expect(project.scale).toBe('major')
+      engine.setScale('pentatonic')
+      engine.importProject(project)
+      expect(engine.getState().scale).toBe('major')
+      delete project.scale
+      engine.importProject(project)
+      expect(engine.getState().scale).toBe('pentatonic')
+      engine.setScale('major')
+      Object.assign(project, { scale: 'invalida' })
+      engine.importProject(project)
+      expect(engine.getState().scale).toBe('pentatonic')
+    })
+
     it.each(INSTRUMENTS)('pads usam oitava e timbre de %s', async (instrument) => {
       await engine.init()
       engine.setTrack(0, { source: instrument })

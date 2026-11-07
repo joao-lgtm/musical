@@ -47,6 +47,20 @@ function voicing(pitches: number[], previous: number[]): number[] {
   return best
 }
 
+function chordCandidates(key: number) {
+  return DEGREES.map((degree, i) => {
+    const root = (key + degree) % 12
+    return { root, pitches: [root, (root + (MINOR[i] ? 3 : 4)) % 12, (root + 7) % 12], name: KEYS[root] + (MINOR[i] ? 'm' : '') }
+  })
+}
+
+function bassAt(chords: Chord[], candidates: ReturnType<typeof chordCandidates>, step: number, length: number, seconds: number, interval = 0): SynthNote {
+  const chord = chords.find(chord => step >= chord.step && step < chord.step + chord.length)!
+  const root = candidates.find(candidate => candidate.name === chord.name)!.root
+  const midi = 36 + (root + interval % 12) % 12 + 12 * Math.floor(interval / 12)
+  return { time: step * seconds, duration: length * seconds, midi }
+}
+
 export function accompany(notes: MelodyNote[], bpm: number, bars: 1 | 2 | 4): Accompaniment {
   const total = bars * STEPS_PER_BAR
   const melody = notes.filter(note => Number.isFinite(note.midi) && Number.isFinite(note.step) &&
@@ -57,10 +71,7 @@ export function accompany(notes: MelodyNote[], bpm: number, bars: 1 | 2 | 4): Ac
   if (!Number.isFinite(bpm) || bpm <= 0) return result
   const seconds = stepDuration(bpm)
   const length = bars === 1 ? 8 : STEPS_PER_BAR
-  const candidates = DEGREES.map((degree, i) => {
-    const root = (key + degree) % 12
-    return { root, pitches: [root, (root + (MINOR[i] ? 3 : 4)) % 12, (root + 7) % 12], name: KEYS[root] + (MINOR[i] ? 'm' : '') }
-  })
+  const candidates = chordCandidates(key)
   let previousChord = 0, previousVoices = [60, 64, 67]
   for (let step = 0; step < total; step += length) {
     const active = melody.map(note => ({
@@ -89,10 +100,44 @@ export function accompany(notes: MelodyNote[], bpm: number, bars: 1 | 2 | 4): Ac
     previousVoices = midis
   }
   for (let step = 0; step < total; step += 8) {
-    const chord = result.chords.find(chord => step >= chord.step && step < chord.step + chord.length)!
-    const root = candidates.find(candidate => candidate.name === chord.name)!.root
-    const fifth = step % STEPS_PER_BAR === 8
-    result.bassNotes.push({ time: step * seconds, duration: 4 * seconds, midi: 36 + (root + (fifth ? 7 : 0)) % 12 })
+    result.bassNotes.push(bassAt(result.chords, candidates, step, 4, seconds, step % STEPS_PER_BAR === 8 ? 7 : 0))
+  }
+  return result
+}
+
+export type ProgressionStyle = 'pop' | 'funk' | 'reggaeton' | 'lofi'
+
+const STYLE_PROGRESSIONS: Record<ProgressionStyle, number[][]> = {
+  pop: [[0, 4, 5, 3], [0, 5, 3, 4], [0, 3, 5, 4]],
+  lofi: [[1, 4, 0, 5], [1, 4, 0, 0], [1, 4, 5, 0]],
+  reggaeton: [[5, 3, 0, 4], [5, 0, 3, 4], [5, 3, 4, 0]],
+  funk: [[0, 0, 3, 0], [0, 3, 0, 0], [0, 0, 0, 3]],
+}
+const FUNK_BASS = [[0, 3, 6, 10, 14], [0, 2, 7, 10, 15], [0, 3, 7, 11, 14]]
+
+export function progression(key: Key, bpm: number, bars: 1 | 2 | 4, style: ProgressionStyle, seed: number): Accompaniment {
+  const result: Accompaniment = { key, chords: [], chordNotes: [], bassNotes: [] }
+  if (!Number.isFinite(bpm) || bpm <= 0) return result
+  const variation = ((Math.trunc(Number.isFinite(seed) ? seed : 0) % 3) + 3) % 3
+  const degrees = STYLE_PROGRESSIONS[style][variation]
+  const candidates = chordCandidates(KEYS.indexOf(key))
+  const seconds = stepDuration(bpm), total = bars * STEPS_PER_BAR
+  const length = bars === 1 ? 8 : STEPS_PER_BAR
+  let previous = [60, 64, 67]
+  for (let step = 0, i = 0; step < total; step += length, i++) {
+    const candidate = candidates[degrees[i % degrees.length]]
+    const midis = voicing(candidate.pitches, previous)
+    result.chords.push({ step, length, name: candidate.name, midis })
+    for (const midi of midis) result.chordNotes.push({ time: step * seconds, duration: length * seconds, midi })
+    previous = midis
+  }
+  for (let bar = 0; bar < bars; bar++) {
+    const positions = style === 'funk' ? FUNK_BASS[variation] : style === 'reggaeton' ? [0, 6] : [0, 8]
+    positions.forEach((position, i) => {
+      const duration = style === 'lofi' ? 8 : style === 'funk' ? 1 : 4
+      const interval = style === 'lofi' && i === 1 ? 7 : style === 'funk' && (i + variation) % 2 === 1 ? 12 : 0
+      result.bassNotes.push(bassAt(result.chords, candidates, bar * STEPS_PER_BAR + position, duration, seconds, interval))
+    })
   }
   return result
 }

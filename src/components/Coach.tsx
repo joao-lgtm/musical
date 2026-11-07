@@ -27,9 +27,7 @@ export function Coach() {
     const targets = row?.map((_, i) => i).filter((i) => step === 0 ? i % 16 === 0 || i % 16 === 8 : step === 1 ? i % 16 === 4 || i % 16 === 12 : i % 2 === 0)
     if (targets?.length && targets.every((i) => row[i])) setStep(step + 1)
   }, [step, state.pattern])
-  useEffect(() => {
-    if (step !== null && state.status === 'ready' && !state.playing && !document.querySelector('dialog[open]')) engine.play()
-  }, [engine, step, state.status, state.playing])
+  // o play só acontece no gesto de abrir o coach; se a pessoa parar, ela decide quando voltar
   useLayoutEffect(() => {
     if (step !== null && (document.activeElement === document.body || panel.current?.contains(document.activeElement) || document.activeElement === startButton.current)) panel.current?.focus({ preventScroll: true })
   }, [step])
@@ -49,6 +47,7 @@ export function Coach() {
         <p>{step < 3 ? `Passo ${step + 1}: ${TEXT[step]}` : 'Esse é o ritmo base do pop!'}</p>
         <p className="coach__future">4. Baixo — em breve · 5. Kalimba — em breve · 6. Melodia — em breve</p>
         <div className="coach__actions">
+          {!state.playing && <button type="button" className="btn" disabled={state.status !== 'ready'} onClick={() => engine.play()}>Voltar a tocar</button>}
           {step < 3 && <button type="button" className="btn btn--ghost" onClick={() => setStep(step + 1)}>Pular</button>}
           <button type="button" className="btn btn--ghost" onClick={exit}>Sair</button>
         </div>
