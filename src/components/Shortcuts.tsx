@@ -4,6 +4,7 @@ const KEYS: [string[], string][] = [
   [['Espaço'], 'Tocar / parar'],
   [['1', '…', '8'], 'Gravar (ou cancelar) a faixa'],
   [['Q', 'W', 'E', 'R'], 'Pads da bateria: bumbo, caixa, chimbal, palmas'],
+  [['A', 'S', 'D', 'F', 'G', 'H', 'J', 'K'], 'Notas da ocarina: segure para tocar'],
   [['T'], 'Ligar / desligar a gravação dos pads'],
   [['P'], 'Entrar / sair do modo Performance'],
   [['Esc'], 'Sair do modo Performance ou fechar a janela'],

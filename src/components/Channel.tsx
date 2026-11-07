@@ -8,6 +8,7 @@ import { Knob } from './Knob'
 import { TrackName } from './TrackName'
 import { VuMeter } from './VuMeter'
 import { Waveform } from './Waveform'
+import { NotePads, rememberOcarina } from './NotePads'
 import { FX_KNOBS } from './fx'
 
 type Props = {
@@ -27,8 +28,8 @@ const STATUS = { empty: 'Vazia', armed: 'Armada', recording: 'Gravando', recorde
 export function Channel({ index, track, transportPlaying, studio, hint, dimmed, collapsible }: Props) {
   const engine = useEngine()
   const { mic, micTrack } = useEngineState(engine)
-  const requesting = mic === 'requesting' && micTrack === index
-  const unavailable = mic === 'denied' || mic === 'missing'
+  const requesting = track.source === 'mic' && mic === 'requesting' && micTrack === index
+  const unavailable = track.source === 'mic' && (mic === 'denied' || mic === 'missing')
   const micFailed = unavailable && micTrack === index
   const blocked = unavailable && micTrack !== null && micTrack !== index
   const n = index + 1
@@ -74,7 +75,7 @@ export function Channel({ index, track, transportPlaying, studio, hint, dimmed, 
       data-status={status}
       data-muted={muted || undefined}
       data-dim={dimmed || undefined}
-      data-collapsible={(collapsible && !micFailed) || undefined}
+      data-collapsible={(collapsible && !micFailed && track.source !== 'ocarina') || undefined}
       style={{ '--ch': `var(--ch${n})`, '--ch-lit': `var(--ch${n}-lit)` } as CSSProperties}
       aria-labelledby={`ch${n}-name`}
     >
@@ -84,6 +85,11 @@ export function Channel({ index, track, transportPlaying, studio, hint, dimmed, 
         <span className="strip__status" role="status">{statusText}</span>
       </header>
 
+      <div className="seg seg--source" role="group" aria-label={`Fonte de som, faixa ${n}`}>
+        <button className="seg__btn" aria-pressed={track.source === 'mic'} onClick={() => engine.setTrack(index, { source: 'mic' })}>Microfone</button>
+        <button className="seg__btn" aria-pressed={track.source === 'ocarina'} onClick={() => { rememberOcarina(engine, index); engine.setTrack(index, { source: 'ocarina' }) }}>Ocarina</button>
+      </div>
+      {track.source === 'ocarina' && <NotePads track={index} />}
       <div className="screen">
         <Waveform track={index} status={status} muted={muted} revision={track.revision} />
         {status === 'empty' && <span className="screen__hint">Vazia</span>}

@@ -3,6 +3,8 @@ import type { ReactNode } from 'react'
 import { useEngine, useEngineState } from '../hooks/useEngine'
 import { surprise } from './drumPresets'
 import { DiceIcon } from './Icons'
+import { loopFilename, renderLoopWav, shareOrDownload } from '../storage/share'
+import type { LoopEngine } from '../audio/types'
 import type { EngineState } from '../audio/types'
 
 const MIC_TIP_KEY = 'loopstudio.micTipShown'
@@ -35,6 +37,7 @@ export function GuideBar({ state, onCalibrate }: { state: EngineState; onCalibra
   const recording = mics.findIndex((t) => t.status === 'recording')
   const armed = mics.findIndex((t) => t.status === 'armed')
   const silent = mics.findIndex((t) => t.silentTake === true)
+  const exportCard = useExportCard(engine, state)
   const free = mics.findIndex((t) => t.status === 'empty') + 1
 
   let msg: ReactNode = null
@@ -71,11 +74,25 @@ export function GuideBar({ state, onCalibrate }: { state: EngineState; onCalibra
       : <>Faixa {active + 1} armada: a gravação começa no tempo 1.</>
     label = 'Cancelar'
     action = () => engine.record(active)
+  } else if (layers >= 3 && exportCard.available) {
+    msg = <>{exportCard.message || 'Ficou bom! Leve seu loop com você.'}</>
+    label = exportCard.busy ? 'Preparando…' : exportCard.canShare ? 'Compartilhar' : 'Baixar o loop'
+    action = () => { void exportCard.save() }
+  } else if (layers === 0 && mics[0]?.source === 'ocarina') {
+    msg = <>A batida está rolando. Aperte <kbd>1</kbd> e toque os pads (ou <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd> <kbd>F</kbd> <kbd>G</kbd> <kbd>H</kbd> <kbd>J</kbd> <kbd>K</kbd>) durante a gravação.</>
+    touchMsg = <>A batida está rolando. Toque em Gravar na faixa 1 e toque os pads durante a gravação.</>
+    label = 'Gravar faixa 1'
+    action = () => engine.record(0)
   } else if (layers === 0) {
     msg = <>A batida está rolando. Aperte <kbd>1</kbd> e cante, bata palmas ou bata na mesa.</>
     touchMsg = <>A batida está rolando. Toque em Gravar na faixa 1 e cante, bata palmas ou bata na mesa.</>
     label = 'Gravar faixa 1'
     action = () => engine.record(0)
+  } else if (layers === 1 && free && mics[free - 1]?.source === 'ocarina') {
+    msg = <>Boa! Aperte <kbd>{free}</kbd> e toque os pads (ou <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd> <kbd>F</kbd> <kbd>G</kbd> <kbd>H</kbd> <kbd>J</kbd> <kbd>K</kbd>) durante a gravação.</>
+    touchMsg = <>Boa! Toque em Gravar e toque os pads durante a gravação para adicionar outra camada.</>
+    label = `Gravar faixa ${free}`
+    action = () => engine.record(free - 1)
   } else if (layers === 1 && free) {
     msg = <>Boa! Agora outra camada por cima: aperte <kbd>{free}</kbd>.</>
     touchMsg = <>Boa! Toque em Gravar para adicionar outra camada por cima.</>
@@ -87,6 +104,8 @@ export function GuideBar({ state, onCalibrate }: { state: EngineState; onCalibra
     label = 'Surpreenda-me'
     action = () => { lastPreset.current = surprise(engine, lastPreset.current) }
   }
+
+  const showingExport = layers >= 3 && active < 0 && !silentWarning && !micUnavailable && state.mic !== 'requesting' && exportCard.available
 
   // Antes da mudança, registra a origem; após o commit, só recupera foco perdido.
   useLayoutEffect(() => {
@@ -109,8 +128,9 @@ export function GuideBar({ state, onCalibrate }: { state: EngineState; onCalibra
     }
   })
 
-  if (!msg) return null
-  const offerCal = !micUnavailable && state.mic !== 'requesting' && !silentWarning && layers === 1 && recording < 0 && armed < 0 && !offered
+  const suggestOcarina = layers === 0 || state.mic === 'denied' || state.mic === 'missing'
+  if (!msg && !suggestOcarina) return null
+  const offerCal = mics.some((track) => track.status === 'recorded' && track.source === 'mic') && !micUnavailable && state.mic !== 'requesting' && !silentWarning && layers === 1 && recording < 0 && armed < 0 && !offered
   function calibrate() {
     setOffered(true)
     try {
@@ -126,10 +146,13 @@ export function GuideBar({ state, onCalibrate }: { state: EngineState; onCalibra
       <p role="status">
         {touchMsg ? <><span className="guide__desktop">{msg}</span><span className="guide__touch">{touchMsg}</span></> : msg}
       </p>
-      {label && <button type="button" className="btn guide__action" onClick={action} disabled={state.status !== 'ready'}>
+      {label && <button type="button" className={showingExport ? 'btn btn--primary guide__action' : 'btn guide__action'} onClick={action}
+        disabled={state.status !== 'ready' || (showingExport && exportCard.busy)} aria-busy={showingExport && exportCard.busy || undefined}>
         {label}
       </button>}
-      {showTip && state.mic === 'ready' && active >= 0 && !silentWarning && (
+      {showingExport && <button type="button" className="btn btn--ghost guide__dismiss" disabled={exportCard.busy} onClick={exportCard.dismiss}>Agora não</button>}
+      {suggestOcarina && <p className="guide__secondary">Sem microfone? Troque a faixa para Ocarina e toque os pads.</p>}
+      {showTip && mics[active]?.source === 'mic' && state.mic === 'ready' && active >= 0 && !silentWarning && (
         <InputTip />
       )}
       {offerCal && (
@@ -195,4 +218,75 @@ function InputTip() {
       <p>Use fones: o som das caixas pode vazar na gravação.</p>
     </div>
   )
+}
+
+function useExportCard(engine: LoopEngine, state: EngineState) {
+  const signature = state.tracks.slice(0, -1).map((t, i) => t.status === 'recorded' ? `${i}:${t.revision}` : '').join('|')
+  const layers = state.tracks.slice(0, -1).filter((t) => t.status === 'recorded').length
+  const elapsed = useRef(0)
+  const previous = useRef(signature)
+  const [available, setAvailable] = useState(false)
+  const [dismissed, setDismissed] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const saving = useRef(false)
+  const [message, setMessage] = useState('')
+  const messageTimer = useRef<ReturnType<typeof setTimeout>>(undefined)
+  const mounted = useRef(true)
+  const [canShare] = useState(() => {
+    try { return !!navigator.canShare?.({ files: [new File([], 'x.wav', { type: 'audio/wav' })] }) }
+    catch { return false }
+  })
+  useEffect(() => {
+    mounted.current = true
+    return () => { mounted.current = false; clearTimeout(messageTimer.current) }
+  }, [])
+  useEffect(() => {
+    if (previous.current !== signature) {
+      previous.current = signature
+      elapsed.current = 0
+      setAvailable(false)
+      setDismissed(false)
+      setMessage('')
+      clearTimeout(messageTimer.current)
+    }
+    if (layers < 3 || !state.playing || state.loopDuration <= 0) return
+    const started = performance.now()
+    const remaining = Math.max(0, state.loopDuration * 2000 - elapsed.current)
+    const timer = setTimeout(() => setAvailable(true), remaining)
+    return () => {
+      clearTimeout(timer)
+      elapsed.current += performance.now() - started
+    }
+  }, [signature, layers, state.playing, state.loopDuration])
+  async function save() {
+    if (saving.current) return
+    saving.current = true
+    setBusy(true)
+    setMessage('')
+    clearTimeout(messageTimer.current)
+    const focused = document.activeElement
+    try {
+      const blob = await renderLoopWav(engine, 2)
+      const result = await shareOrDownload(blob, loopFilename(state.bpm, 'wav'), {
+        title: 'Meu loop no Loop Studio', text: 'Fiz este loop no Loop Studio',
+      })
+      if (!mounted.current) return
+      if (result !== 'cancelled') {
+        setMessage(result === 'shared' ? 'Loop compartilhado.' : 'Loop baixado.')
+        messageTimer.current = setTimeout(() => setMessage(''), 3000)
+      }
+    } catch {
+      if (mounted.current) setMessage('Não deu para gerar o áudio. Tente de novo.')
+    } finally {
+      saving.current = false
+      if (mounted.current) {
+        setBusy(false)
+        requestAnimationFrame(() => {
+          if (mounted.current && focused instanceof HTMLButtonElement && focused.isConnected &&
+              (document.activeElement === document.body || document.activeElement === focused)) focused.focus({ preventScroll: true })
+        })
+      }
+    }
+  }
+  return { available: available && !dismissed, busy, message, canShare, save, dismiss: () => setDismissed(true) }
 }

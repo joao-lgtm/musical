@@ -1,5 +1,6 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest'
 import { createEngine } from './engine'
+import * as synth from './synth'
 
 describe('nomes das faixas', () => {
   it('inclui os nomes padrão no estado e nos projetos exportados', () => {
@@ -105,6 +106,7 @@ describe('audio sem permissao de microfone', () => {
     engine.dispose()
     vi.useRealTimers()
     vi.unstubAllGlobals()
+    vi.restoreAllMocks()
   })
 
   it('inicializa uma vez e toca bateria sem pedir captura', async () => {
@@ -119,6 +121,22 @@ describe('audio sem permissao de microfone', () => {
     expect(getUserMedia).not.toHaveBeenCalled()
     expect(TestContext.instances[0].audioWorklet.addModule).not.toHaveBeenCalled()
     expect(engine.getInputLevel()).toBe(0)
+  })
+
+  it('init seguido de import de take ocarina e play inicia e mantem o transporte', async () => {
+    const draft = engine.exportProject()
+    draft.key = 'G'
+    draft.sampleRate = 48000
+    draft.tracks[0].source = 'ocarina'
+    draft.tracks[0].audio = new Float32Array(4800).fill(0.2)
+    await engine.init()
+    engine.importProject(draft)
+    engine.play()
+    expect(engine.getState()).toMatchObject({ playing: true, key: 'G' })
+    expect(engine.getState().tracks[0]).toMatchObject({ source: 'ocarina', status: 'recorded' })
+    await vi.advanceTimersByTimeAsync(100)
+    expect(engine.getState().playing).toBe(true)
+    expect(TestContext.instances[0].resume).toHaveBeenCalledTimes(2)
   })
 
   it('compartilha o pedido concorrente, mede a entrada e libera todos os recursos', async () => {
@@ -356,4 +374,245 @@ describe('audio sem permissao de microfone', () => {
     engine.play()
     expect(master.linearRampToValueAtTime).not.toHaveBeenCalled()
   })
+
+  describe('ocarina', () => {
+    let voices: MockInstance<typeof synth.startVoice>
+    let rendered: MockInstance<typeof synth.renderNotes>
+    beforeEach(() => {
+      voices = vi.spyOn(synth, 'startVoice').mockImplementation(() => ({ stop: vi.fn() }))
+      rendered = vi.spyOn(synth, 'renderNotes').mockImplementation(async (notes, duration, sampleRate) => {
+        const buffer = new TestBuffer({ numberOfChannels: 1, length: Math.ceil(duration * sampleRate), sampleRate })
+        if (notes.length) buffer.getChannelData(0).fill(0.2)
+        return buffer as unknown as AudioBuffer
+      })
+    })
+    async function arm() {
+      await engine.init()
+      engine.setTrack(0, { source: 'ocarina' })
+      engine.record(0)
+      const ctx = TestContext.instances[0]
+      const start = ctx.currentTime - 0.02 + engine.getArmedIn(0)!
+      return { ctx, start, duration: engine.getState().loopDuration }
+    }
+    async function finishTake(ctx: TestContext, start: number, duration: number) {
+      ctx.currentTime = start + duration + 0.021
+      await vi.advanceTimersByTimeAsync(25)
+    }
+
+    it('toca pela faixa, respeita o tom e solta somente a nota pedida', async () => {
+      await engine.init()
+      engine.noteOn(0, 0)
+      expect(voices).not.toHaveBeenCalled()
+      engine.setTrack(0, { source: 'ocarina', volume: 0.4, pan: 0.5, delay: 0.3 })
+      engine.setKey('D')
+      engine.noteOn(0, 0)
+      engine.noteOn(0, 1)
+      expect(voices.mock.calls.map((call) => call[2])).toEqual([62, 64])
+      expect(voices.mock.calls[0][1]).toBe(voices.mock.calls[1][1])
+      engine.noteOff(0, 7)
+      expect(voices.mock.results[0].value.stop).not.toHaveBeenCalled()
+      engine.noteOff(0, 0)
+      expect(voices.mock.results[0].value.stop).toHaveBeenCalledWith(0)
+      expect(voices.mock.results[1].value.stop).not.toHaveBeenCalled()
+      expect(getUserMedia).not.toHaveBeenCalled()
+    })
+
+    it('limita a quatro vozes por canal, cortando a mais antiga', async () => {
+      await engine.init()
+      engine.setTrack(0, { source: 'ocarina' })
+      engine.setTrack(1, { source: 'ocarina' })
+      for (let degree = 0; degree < 5; degree++) engine.noteOn(0, degree)
+      expect(voices.mock.results[0].value.stop).toHaveBeenCalledTimes(1)
+      expect(voices.mock.results[1].value.stop).not.toHaveBeenCalled()
+      engine.noteOn(1, 0)
+      engine.noteOff(0, 0)
+      expect(voices.mock.results[0].value.stop).toHaveBeenCalledTimes(1)
+      engine.stop()
+      for (const result of voices.mock.results) expect(result.value.stop).toHaveBeenCalledTimes(1)
+    })
+
+    it('grava eventos no tempo ouvido, sem mic nem compensacao de entrada', async () => {
+      engine.setLatencyOffset(200)
+      const { ctx, start, duration } = await arm()
+      engine.setLatencyOffset(200)
+      ctx.currentTime = start + 0.01
+      engine.noteOn(0, 7)
+      expect(engine.getState().tracks[0].status).toBe('armed')
+      engine.noteOff(0, 7)
+      ctx.currentTime = start + 0.27
+      engine.noteOn(0, 0)
+      expect(engine.getState().tracks[0].status).toBe('recording')
+      ctx.currentTime = start + 0.77
+      engine.noteOff(0, 0)
+      await finishTake(ctx, start, duration)
+      const note = rendered.mock.calls[0][0][0]
+      expect(note.time).toBeCloseTo(0.25)
+      expect(note.duration).toBeCloseTo(0.5)
+      expect(note.midi).toBe(60)
+      expect(rendered.mock.calls[0][0]).toHaveLength(1)
+      expect(engine.getState().tracks[0]).toMatchObject({ status: 'recorded', canUndo: true, silentTake: false })
+      expect(engine.exportProject().tracks[0].audio![0]).toBeCloseTo(0.2)
+      expect(getUserMedia).not.toHaveBeenCalled()
+      expect(TestWorklet.instances).toHaveLength(0)
+      engine.undo(0)
+      expect(engine.getState().tracks[0].status).toBe('empty')
+    })
+
+    it('envia toque de duracao zero ao render em vez de descartar como silencio', async () => {
+      const { ctx, start, duration } = await arm()
+      ctx.currentTime = start + 0.22
+      engine.noteOn(0, 0)
+      engine.noteOff(0, 0)
+      await finishTake(ctx, start, duration)
+      expect(rendered).toHaveBeenCalledTimes(1)
+      expect(rendered.mock.calls[0][0][0].duration).toBe(0)
+      expect(engine.getState().tracks[0]).toMatchObject({ status: 'recorded', silentTake: false })
+    })
+
+    it('captura em time zero a nota segurada no armed e solta no meio, preservando o MIDI original', async () => {
+      const { ctx, start, duration } = await arm()
+      ctx.currentTime = start - 0.1
+      engine.noteOn(0, 0)
+      expect(engine.getState().tracks[0].status).toBe('armed')
+      engine.setKey('D')
+      ctx.currentTime = start + 0.22
+      vi.advanceTimersByTime(25)
+      expect(engine.getState().tracks[0].status).toBe('recording')
+      ctx.currentTime = start + 1.02
+      engine.noteOff(0, 0)
+      await finishTake(ctx, start, duration)
+      expect(rendered.mock.calls[0][0]).toHaveLength(1)
+      expect(rendered.mock.calls[0][0][0]).toMatchObject({ time: 0, midi: 60 })
+      expect(rendered.mock.calls[0][0][0].duration).toBeCloseTo(1)
+      expect(engine.getState().tracks[0]).toMatchObject({ status: 'recorded', silentTake: false })
+    })
+
+    it('captura nota da contagem mantida ate o fechamento mesmo com tick atrasado', async () => {
+      const { ctx, start, duration } = await arm()
+      ctx.currentTime = start - 0.5
+      engine.noteOn(0, 2)
+      expect(engine.getState().tracks[0].status).toBe('armed')
+      await finishTake(ctx, start, duration)
+      expect(rendered.mock.calls[0][0]).toEqual([{ time: 0, duration, midi: 64 }])
+      expect(engine.getState().tracks[0]).toMatchObject({ status: 'recorded', silentTake: false })
+      expect(voices.mock.results[0].value.stop).toHaveBeenCalledTimes(1)
+    })
+
+    it('fecha a nota segurada na borda do loop', async () => {
+      const { ctx, start, duration } = await arm()
+      ctx.currentTime = start + 0.52
+      engine.noteOn(0, 2)
+      await finishTake(ctx, start, duration)
+      expect(rendered.mock.calls[0][0][0].duration).toBeCloseTo(duration - 0.5)
+      expect(voices.mock.results[0].value.stop).toHaveBeenCalledTimes(1)
+    })
+
+    it('take sem notas restaura o audio anterior e o undo', async () => {
+      const { ctx, start, duration } = await arm()
+      ctx.currentTime = start + 0.22
+      engine.noteOn(0, 0)
+      ctx.currentTime = start + 0.52
+      engine.noteOff(0, 0)
+      await finishTake(ctx, start, duration)
+      const previous = engine.exportProject().tracks[0].audio
+      const canUndo = engine.getState().tracks[0].canUndo
+      engine.record(0)
+      const nextStart = ctx.currentTime - 0.02 + engine.getArmedIn(0)!
+      await finishTake(ctx, nextStart, duration)
+      expect(engine.getState().tracks[0]).toMatchObject({ status: 'recorded', silentTake: true, canUndo })
+      expect(engine.exportProject().tracks[0].audio).toEqual(previous)
+      expect(rendered).toHaveBeenCalledTimes(1)
+    })
+
+    it('overdub mistura a camada nova e undo restaura o take', async () => {
+      const { ctx, start, duration } = await arm()
+      ctx.currentTime = start + 0.22
+      engine.noteOn(0, 0)
+      await finishTake(ctx, start, duration)
+      const previous = engine.exportProject().tracks[0].audio
+      engine.setTrack(0, { overdubbing: true })
+      engine.record(0)
+      const nextStart = ctx.currentTime - 0.02 + engine.getArmedIn(0)!
+      ctx.currentTime = nextStart + 0.22
+      engine.noteOn(0, 1)
+      await finishTake(ctx, nextStart, duration)
+      expect(engine.exportProject().tracks[0].audio![0]).toBeCloseTo(0.4)
+      engine.undo(0)
+      expect(engine.exportProject().tracks[0].audio).toEqual(previous)
+    })
+
+    it('encerra a nota roubada no evento correto ao exceder a polifonia', async () => {
+      const { ctx, start, duration } = await arm()
+      for (let degree = 0; degree < 5; degree++) {
+        ctx.currentTime = start + 0.22 + degree * 0.1
+        engine.noteOn(0, degree)
+      }
+      await finishTake(ctx, start, duration)
+      expect(rendered.mock.calls[0][0]).toHaveLength(5)
+      expect(rendered.mock.calls[0][0][0].duration).toBeCloseTo(0.4)
+    })
+
+    it('worklet e desconexao do mic nao interferem no take de instrumento', async () => {
+      const { ctx, start, duration } = await arm()
+      const mic = micStream()
+      getUserMedia.mockResolvedValue(mic.stream)
+      await engine.ensureMic()
+      ctx.currentTime = start + 0.22
+      engine.noteOn(0, 0)
+      const onmessage = TestWorklet.instances[0].port.onmessage as unknown as (event: { data: { frame: number; data: Float32Array } }) => void
+      onmessage({ data: { frame: 10000, data: new Float32Array(128) } })
+      expect(engine.getState().tracks[0].status).toBe('recording')
+      mic.track.onended!()
+      expect(engine.getState().tracks[0].status).toBe('recording')
+      await finishTake(ctx, start, duration)
+      expect(engine.getState().tracks[0].status).toBe('recorded')
+    })
+
+    it('troca de source durante armed cancela e solta as vozes', async () => {
+      await arm()
+      engine.noteOn(0, 0)
+      engine.setTrack(0, { source: 'mic' })
+      expect(engine.getState().tracks[0]).toMatchObject({ source: 'mic', status: 'empty' })
+      expect(voices.mock.results[0].value.stop).toHaveBeenCalledTimes(1)
+    })
+
+    it('troca de source cancela captura e vozes sem aplicar render atrasado', async () => {
+      const { ctx, start, duration } = await arm()
+      const result = deferred<AudioBuffer>()
+      rendered.mockReturnValueOnce(result.promise)
+      ctx.currentTime = start + 0.22
+      engine.noteOn(0, 0)
+      await finishTake(ctx, start, duration)
+      engine.setTrack(0, { source: 'mic' })
+      expect(engine.getState().tracks[0]).toMatchObject({ source: 'mic', status: 'empty' })
+      expect(voices.mock.results[0].value.stop).toHaveBeenCalled()
+      result.resolve(new TestBuffer({ numberOfChannels: 1, length: 480, sampleRate: 100 }) as unknown as AudioBuffer)
+      await Promise.resolve()
+      expect(engine.getState().tracks[0].status).toBe('empty')
+      expect(engine.exportProject().tracks[0].audio).toBeNull()
+    })
+
+    it('exporta key/source e aplica defaults ao importar projeto antigo', async () => {
+      await engine.init()
+      engine.setKey('G')
+      engine.setTrack(0, { source: 'ocarina' })
+      const data = engine.exportProject()
+      expect(data.key).toBe('G')
+      expect(data.tracks[0].source).toBe('ocarina')
+      delete data.key
+      for (const track of data.tracks) delete track.source
+      engine.importProject(data)
+      expect(engine.getState().key).toBe('C')
+      expect(engine.getState().tracks.every((track) => track.source === 'mic')).toBe(true)
+    })
+
+    it('dispose solta vozes mesmo sem transporte', async () => {
+      await engine.init()
+      engine.setTrack(0, { source: 'ocarina' })
+      engine.noteOn(0, 0)
+      engine.dispose()
+      expect(voices.mock.results[0].value.stop).toHaveBeenCalledTimes(1)
+    })
+  })
+
 })

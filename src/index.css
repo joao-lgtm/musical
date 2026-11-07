@@ -599,6 +599,8 @@ input[type='range']::-moz-range-thumb { width: 16px; height: 24px; border: 0; bo
   box-shadow: inset 0 0 0 1px rgb(255 209 115 / 0.35);
 }
 .guide--warning .guide__dot { background: #ffd173; box-shadow: 0 0 12px rgb(255 209 115 / 0.4); animation: none; }
+.guide__dismiss { min-height: 44px; max-width: 100%; }
+@media (max-width: 480px) { .guide__dismiss { width: 100%; } }
 .guide__touch { display: none; }
 .guide__action { flex: none; min-width: 44px; min-height: 44px; max-width: 100%; }
 .guide__action:focus-visible { outline: 2px solid var(--ch1-lit); outline-offset: 3px; }
@@ -666,3 +668,26 @@ input[type='range']::-moz-range-thumb { width: 16px; height: 24px; border: 0; bo
 @media (prefers-reduced-motion: reduce) {
   .rec[data-requesting], .mic-spinner { animation: none; }
 }
+
+/* Ocarina */
+.seg--source { width: 100%; }
+.seg--source .seg__btn { flex: 1; min-width: 0; min-height: 44px; padding: 0 6px; }
+.note-pads { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 5px; }
+.note-pad { min-width: 0; min-height: 44px; padding: 4px 2px; border: 1px solid var(--line-2); border-radius: 6px; background: var(--panel-hi); color: var(--ink); font-size: 0.8125rem; font-weight: 700; touch-action: none; user-select: none; cursor: pointer; }
+.note-pad small { display: block; font-size: 0.625rem; color: var(--ink-2); }
+.note-pad[data-playing], .note-pad[data-key-playing] { background: var(--ch-lit); color: var(--on-color); }
+.note-pad[data-playing] small, .note-pad[data-key-playing] small { color: inherit; }
+.note-pad:disabled { opacity: 0.4; cursor: not-allowed; }
+.field--key select { min-height: 44px; padding: 0 10px; border: 1px solid var(--line-2); border-radius: 6px; background: var(--panel-hi); color: var(--ink); }
+.guide .guide__secondary { flex-basis: 100%; font-size: 0.875rem; color: var(--ink-2); }
+.keys dt { flex-wrap: wrap; }
+@media (max-width: 720px) {
+  .strip[data-collapsible] > .seg--source { display: flex; }
+}
+
+/* Retomada do rascunho: espaço reservado durante a leitura local. */
+.start__actions { display: grid; gap: 8px; margin-top: 32px; }
+.start__actions .start__go { margin-top: 0; padding-inline: 16px; width: 100%; }
+.start__draft { min-height: 21px; color: var(--ink-2); font-size: 0.875rem; }
+.start__fresh { min-height: 44px; }
+.start__fresh .btn { min-height: 44px; width: 100%; }

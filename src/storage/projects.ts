@@ -61,3 +61,34 @@ export function deleteProject(id: string): Promise<void> {
     return () => undefined
   })
 }
+
+
+async function draftTx<T>(mode: IDBTransactionMode, fn: (store: IDBObjectStore) => () => T): Promise<T> {
+  const t = (await db()).transaction('data', mode)
+  const result = fn(t.objectStore('data'))
+  return new Promise((resolve, reject) => {
+    t.oncomplete = () => resolve(result())
+    t.onerror = t.onabort = () => reject(t.error)
+  })
+}
+
+export function saveDraft(data: ProjectData): Promise<void> {
+  return draftTx('readwrite', (store) => {
+    store.put(data, '__draft__')
+    return () => undefined
+  })
+}
+
+export function loadDraft(): Promise<ProjectData | null> {
+  return draftTx('readonly', (store) => {
+    const req = store.get('__draft__')
+    return () => (req.result as ProjectData | undefined) ?? null
+  })
+}
+
+export function clearDraft(): Promise<void> {
+  return draftTx('readwrite', (store) => {
+    store.delete('__draft__')
+    return () => undefined
+  })
+}

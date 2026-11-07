@@ -1,4 +1,7 @@
 import { useEffect, useState } from 'react'
+import { KEYS } from '../audio/types'
+import type { Key } from '../audio/types'
+import { keyName } from './NotePads'
 import type { EngineState } from '../audio/types'
 import { useEngine } from '../hooks/useEngine'
 import { BeatIndicator } from './BeatIndicator'
@@ -6,7 +9,7 @@ import { LockIcon, MetronomeIcon, PlayIcon, StopIcon, TrashIcon } from './Icons'
 
 const BARS = [1, 2, 4] as const
 
-export function Transport({ state }: { state: EngineState }) {
+export function Transport({ state, studio }: { state: EngineState; studio: boolean }) {
   const engine = useEngine()
   const locked = state.tracks.some((t) => t.kind === 'mic' && t.status !== 'empty')
   const hasAudio = state.tracks.some((t) => t.status !== 'empty')
@@ -83,6 +86,11 @@ export function Transport({ state }: { state: EngineState }) {
         {confirming ? 'Confirmar?' : 'Apagar tudo'}
       </button>
 
+      {studio && <label className="field field--key"><span className="field__label">Tom</span>
+        <select aria-label="Tom do projeto" value={state.key} onChange={(e) => engine.setKey(e.target.value as Key)}>
+          {KEYS.map((key) => <option key={key} value={key}>{keyName(key)}</option>)}
+        </select>
+      </label>}
       <BeatIndicator bars={state.bars} />
 
       <p id="lock-note" className="transport__note" hidden={!locked}>

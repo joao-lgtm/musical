@@ -8,6 +8,7 @@
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "test": "vitest run",
+    "bench": "vitest run src/audio --mode bench --no-file-parallelism --silent=false -t benchmark",
     "preview": "vite preview"
   },
   "dependencies": {

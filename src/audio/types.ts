@@ -12,6 +12,15 @@ export type TrackStatus = 'empty' | 'armed' | 'recording' | 'recorded'
 /** mic: gravado pelo microfone. drums: bateria sintetizada pelo sequenciador (último canal). */
 export type TrackKind = 'mic' | 'drums'
 
+/** De onde vem o som de um canal 'mic': microfone ou instrumento sintetizado tocado pelos pads (grava pelo mesmo fluxo de take). */
+export type TrackSource = 'mic' | 'ocarina'
+
+/** Tom do projeto; os instrumentos usam a pentatônica maior desse tom (ver scale.ts). */
+export type Key = 'C' | 'C#' | 'D' | 'D#' | 'E' | 'F' | 'F#' | 'G' | 'G#' | 'A' | 'A#' | 'B'
+export const KEYS: readonly Key[] = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
+/** Pads de nota por instrumento (graus 0..7 da pentatônica a partir da tônica). */
+export const NOTE_PADS = 8
+
 export interface TrackState {
   readonly kind: TrackKind
   /** Nome exibido (editável, até 24 caracteres). Padrão: 'Faixa N' / 'Bateria'. */
@@ -28,6 +37,8 @@ export interface TrackState {
   readonly nudge: number
   /** Só canais mic: se o próximo record sincroniza com overdub (true) ou substitui (false). */
   readonly overdubbing: boolean
+  /** Só canais mic. 'mic' por padrão; com instrumento, gravar NÃO pede microfone e o take não usa a latência de entrada nem latencyOffset. */
+  readonly source: TrackSource
   /** Há um estado anterior (1 nível) para undo(track). */
   readonly canUndo: boolean
   /** true quando o último take/overdub do canal mic foi descartado por estar mudo; volta a false ao armar, limpar, desfazer ou importar */
@@ -79,6 +90,7 @@ export interface EngineState {
   readonly playing: boolean
   readonly loopDuration: number // segundos
   readonly masterVolume: number // 0..1
+  readonly key: Key // padrão 'C'
   /** 8 canais mic + 1 canal drums no fim (índice tracks.length - 1). */
   readonly tracks: readonly TrackState[]
   /** pattern[voz][passo], voz na ordem de DRUM_VOICES, bars * STEPS_PER_BAR passos. */
@@ -95,7 +107,7 @@ export interface Position {
 }
 
 /** Configuração editável de um canal (tudo de TrackState menos kind/status). */
-export type TrackParams = Pick<TrackState, 'name' | 'volume' | 'muted' | 'solo' | 'pan' | 'filter' | 'delay' | 'reverb' | 'nudge' | 'overdubbing'>
+export type TrackParams = Pick<TrackState, 'name' | 'volume' | 'muted' | 'solo' | 'pan' | 'filter' | 'delay' | 'reverb' | 'nudge' | 'overdubbing' | 'source'>
 
 /** Projeto serializável (IndexedDB). Áudio mono por canal mic; null = vazio. */
 export interface ProjectData {
@@ -103,8 +115,11 @@ export interface ProjectData {
   bpm: number
   bars: 1 | 2 | 4
   masterVolume: number
+  /** Ausente em projetos antigos → 'C'. */
+  key?: Key
   sampleRate: number
-  tracks: (TrackParams & { audio: Float32Array | null })[]
+  /** `source` ausente em projetos antigos → 'mic'. */
+  tracks: (Omit<TrackParams, 'source'> & { source?: TrackSource; audio: Float32Array | null })[]
   pattern: boolean[][]
 }
 
@@ -145,6 +160,15 @@ export interface LoopEngine {
   /** Atualiza parâmetros do canal (merge parcial). Valores fora da faixa são limitados. */
   setTrack(track: number, params: Partial<TrackParams>): void
   /** skipNext: ao inserir via pad ao vivo, pula apenas a ocorrência quantizada ainda não processada pelo scheduler; as próximas voltas tocam normalmente. */
+  /** Muda o tom (afeta pads e takes futuros; takes já gravados não mudam). */
+  setKey(key: Key): void
+  /**
+   * Toca/solta uma nota do instrumento do canal (grau 0..NOTE_PADS-1 da pentatônica de state.key, a partir da 4ª oitava).
+   * Ignorado se o canal não tiver source de instrumento. Soa ao vivo e, se o canal estiver 'recording', entra no take.
+   * Polifônico até 4 vozes por canal (a mais antiga é cortada com rampa). noteOff sem noteOn é ignorado.
+   */
+  noteOn(track: number, degree: number): void
+  noteOff(track: number, degree: number): void
   toggleStep(voice: number, step: number, opts?: { skipNext?: boolean }): void
   /** Substitui o padrão inteiro numa única notificação; redimensionado para bars*STEPS_PER_BAR (repete ou corta). */
   setPattern(pattern: boolean[][]): void

@@ -3,12 +3,14 @@ import { Calibration } from './components/Calibration'
 import { CountIn } from './components/CountIn'
 import { GuideBar, SurpriseButton } from './components/GuideBar'
 import { Mixer } from './components/Mixer'
+import { lastOcarina, rememberOcarina } from './components/NotePads'
 import { Performance } from './components/Performance'
 import { ProjectBar } from './components/ProjectBar'
 import { Sequencer } from './components/Sequencer'
 import { Shortcuts } from './components/Shortcuts'
 import { StartScreen } from './components/StartScreen'
 import { Transport } from './components/Transport'
+import { useAutosave } from './hooks/useAutosave'
 import { EngineContext, useEngineState, useOwnEngine } from './hooks/useEngine'
 
 const FIELD = 'input, textarea, select, [contenteditable]:not([contenteditable="false"])'
@@ -30,6 +32,7 @@ export default function App() {
   // depois de pronto uma vez, erros (ex.: mic desconectado) aparecem na mesa, não na tela inicial
   const [started, setStarted] = useState(false)
   if (state.status === 'ready' && !started) setStarted(true)
+  useAutosave(engine, started && state.status === 'ready')
   const ready = state.status === 'ready'
   const [studio, setStudio] = useState(loadStudio)
   const keysRef = useRef<HTMLDialogElement>(null)
@@ -62,6 +65,58 @@ export default function App() {
       /* modo privado: só não persiste */
     }
   }
+
+  useEffect(() => {
+    if (!ready || calibrating) return
+    const held = new Map<string, { track: number; degree: number }>()
+    const showHeld = (track: number, degree: number, on: boolean) => {
+      const pad = document.querySelector<HTMLElement>(`.note-pads[data-track="${track}"] [data-degree="${degree}"]`)
+      if (on) pad?.setAttribute('data-key-playing', '')
+      else pad?.removeAttribute('data-key-playing')
+    }
+    const release = () => {
+      for (const { track, degree } of held.values()) {
+        engine.noteOff(track, degree)
+        showHeld(track, degree, false)
+      }
+      held.clear()
+    }
+    const down = (e: KeyboardEvent) => {
+      const degree = 'asdfghjk'.indexOf(e.key.toLowerCase())
+      if (degree < 0 || e.repeat || held.has(e.code) || e.ctrlKey || e.metaKey || e.altKey ||
+          focusIn(e.target, FIELD) || document.querySelector('dialog[open]')) return
+      const tracks = engine.getState().tracks
+      const active = tracks.findIndex((t) => t.source === 'ocarina' && (t.status === 'armed' || t.status === 'recording'))
+      const last = lastOcarina(engine)
+      const track = active >= 0 ? active : last !== undefined && tracks[last]?.source === 'ocarina'
+        ? last : tracks.findIndex((t) => t.source === 'ocarina')
+      if (track < 0) return
+      e.preventDefault()
+      held.set(e.code, { track, degree })
+      rememberOcarina(engine, track)
+      showHeld(track, degree, true)
+      engine.noteOn(track, degree)
+    }
+    const up = (e: KeyboardEvent) => {
+      const note = held.get(e.code)
+      if (!note) return
+      engine.noteOff(note.track, note.degree)
+      showHeld(note.track, note.degree, false)
+      held.delete(e.code)
+    }
+    const visibility = () => { if (document.hidden) release() }
+    window.addEventListener('keydown', down)
+    window.addEventListener('keyup', up)
+    window.addEventListener('blur', release)
+    document.addEventListener('visibilitychange', visibility)
+    return () => {
+      release()
+      window.removeEventListener('keydown', down)
+      window.removeEventListener('keyup', up)
+      window.removeEventListener('blur', release)
+      document.removeEventListener('visibilitychange', visibility)
+    }
+  }, [engine, ready, calibrating])
 
   // Espaço = tocar/parar, 1–8 = gravar, P = performance, ? = atalhos (Q W E R ficam com o Sequencer)
   useEffect(() => {
@@ -133,7 +188,7 @@ export default function App() {
           </div>
         )}
 
-        <Transport state={state} />
+        <Transport state={state} studio={studio} />
         <ProjectBar />
         <div className="cue">
           <GuideBar state={state} onCalibrate={() => calRef.current?.showModal()} />
