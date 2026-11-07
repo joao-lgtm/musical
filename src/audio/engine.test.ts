@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest'
 import { createEngine } from './engine'
 import * as synth from './synth'
+import * as drums from './drums'
+import * as groove from './groove'
 import { INSTRUMENTS } from './types'
 
 describe('nomes das faixas', () => {
@@ -377,6 +379,244 @@ describe('audio sem permissao de microfone', () => {
     expect(master.linearRampToValueAtTime).not.toHaveBeenCalled()
   })
 
+  describe('bateria viva', () => {
+    it('aplica velocity e offset, limita no now e mantem seed da sessao', async () => {
+      await engine.init()
+      engine.setMetronome(false)
+      engine.setPattern([[true, true]])
+      const play = vi.spyOn(drums, 'playDrum').mockImplementation(() => {})
+      const human = vi.spyOn(groove, 'humanize').mockReturnValue({ velocity: 0.7, offset: 0.004 })
+      engine.play()
+      expect(play.mock.calls[0][3]).toBeCloseTo(0.054)
+      expect(play.mock.calls[0][4]).toBe(0.7)
+      const seed = human.mock.calls[0][2]
+      human.mockReturnValue({ velocity: 0.8, offset: -0.005 })
+      TestContext.instances[0].currentTime = 0.198
+      vi.advanceTimersByTime(25)
+      expect(play.mock.calls.at(-1)![3]).toBe(0.198)
+      expect(human.mock.calls.at(-1)!).toEqual(['kick', 1, seed])
+      engine.stop()
+      engine.play()
+      expect(human.mock.calls.at(-1)![2]).toBe(seed)
+    })
+
+    it('faz virada no compasso absoluto 3 e 7, mantendo o padrao salvo', async () => {
+      await engine.init()
+      engine.setBpm(120)
+      engine.setBars(1)
+      engine.setMetronome(false)
+      engine.setPattern([[]])
+      const pattern = engine.getState().pattern
+      const play = vi.spyOn(drums, 'playDrum').mockImplementation(() => {})
+      vi.spyOn(groove, 'humanize').mockReturnValue({ velocity: 1, offset: 0 })
+      engine.play()
+      const ctx = TestContext.instances[0]
+      for (let step = 1; step < 128; step++) {
+        ctx.currentTime = 0.05 + step * 0.125 - 0.001
+        vi.advanceTimersByTime(25)
+      }
+      const hits = play.mock.calls.map((call) => Math.round((call[3] - 0.05) / 0.125))
+      expect(hits).toEqual([56, 58, 60, 61, 62, 63, 120, 122, 124, 125, 126, 127])
+      expect(play.mock.calls.every((call) => call[2] === 'snare')).toBe(true)
+      expect(engine.getState().pattern).toBe(pattern)
+    })
+
+    it('desligado preserva passos e tempos exatos, sem humanizar nem gerar virada', async () => {
+      await engine.init()
+      engine.setLiveDrums(false)
+      engine.setMetronome(false)
+      engine.setPattern([[true]])
+      const play = vi.spyOn(drums, 'playDrum').mockImplementation(() => {})
+      const human = vi.spyOn(groove, 'humanize')
+      const fill = vi.spyOn(groove, 'fillPattern')
+      engine.play()
+      expect(play.mock.calls[0].slice(2)).toEqual(['kick', 0.05])
+      expect(human).not.toHaveBeenCalled()
+      expect(fill).not.toHaveBeenCalled()
+    })
+
+    it('renderMix conta virada a partir da saida recortada e usa mesma seed/offset', async () => {
+      await engine.init()
+      engine.setBpm(120)
+      engine.setBars(1)
+      class Offline extends TestContext {
+        channels: number
+        length: number
+        constructor(channels: number, length: number, rate: number) { super(); this.channels = channels; this.length = length; this.sampleRate = rate }
+        async startRendering() { return new TestBuffer({ numberOfChannels: this.channels, length: this.length, sampleRate: this.sampleRate }) }
+      }
+      vi.stubGlobal('OfflineAudioContext', Offline)
+      engine.setPattern([[true, false]])
+      const play = vi.spyOn(drums, 'playDrum').mockImplementation(() => {})
+      const human = vi.spyOn(groove, 'humanize').mockReturnValue({ velocity: 0.6, offset: 0.003 })
+      engine.play()
+      const seed = human.mock.calls[0][2]
+      engine.stop()
+      play.mockClear()
+      human.mockClear()
+      await engine.renderMix(4)
+      const snare = play.mock.calls.filter((call) => call[2] === 'snare')
+      // 2 loops de pre-roll (4s), virada na barra 3: passo absoluto 56 em 7s.
+      expect(snare.map((call) => call[3])).toEqual([11.003, 11.253, 11.503, 11.628, 11.753, 11.878])
+      expect(snare.every((call) => call[4] === 0.6)).toBe(true)
+      expect(human.mock.calls.every((call) => call[2] === seed)).toBe(true)
+      expect(human.mock.calls.some((call) => call[1] === 56)).toBe(true)
+      engine.setLiveDrums(false)
+      play.mockClear()
+      human.mockClear()
+      await engine.renderMix(4)
+      expect(play.mock.calls.some((call) => call[2] === 'snare')).toBe(false)
+      expect(human).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('lote atomico', () => {
+    it.each(['armed', 'recording'] as const)('recusa lote inteiro em %s e com canal invalido/duplicado', async (status) => {
+      await engine.init()
+      engine.setTrack(1, { source: 'ocarina' })
+      engine.record(1)
+      if (status === 'recording') {
+        TestContext.instances[0].currentTime = 3
+        vi.advanceTimersByTime(25)
+      }
+      expect(engine.getState().tracks[1].status).toBe(status)
+      const before = engine.getState()
+      expect(engine.applyBatch({ takes: [{ track: 0, samples: Float32Array.of(1) }], pattern: [[true]] })).toBe(false)
+      expect(engine.getState()).toBe(before)
+      engine.stop()
+      const stopped = engine.getState()
+      expect(engine.applyBatch({ takes: [{ track: 0, samples: Float32Array.of(1) }, { track: 2, samples: Float32Array.of(1) }] })).toBe(false)
+      expect(engine.applyBatch({ takes: [{ track: 0, samples: Float32Array.of(1) }, { track: 0, samples: Float32Array.of(2) }] })).toBe(false)
+      expect(engine.getState()).toBe(stopped)
+    })
+
+    it('prepara todos os buffers antes de qualquer mutacao', async () => {
+      await engine.init()
+      const before = engine.getState()
+      vi.spyOn(TestContext.instances[0], 'createBuffer').mockImplementationOnce(() => new TestBuffer({ numberOfChannels: 1, length: 480, sampleRate: 100 })).mockImplementationOnce(() => { throw new Error('sem memoria') })
+      expect(engine.applyBatch({ takes: [{ track: 0, samples: Float32Array.of(1) }, { track: 1, samples: Float32Array.of(2) }] })).toBe(false)
+      expect(engine.getState()).toBe(before)
+      expect(engine.getTakeAudio(0)).toBeNull()
+    })
+
+    it.each(['create', 'connect', 'start', 'retire'] as const)('falha na segunda fonte em %s preserva tudo sem notificar', async (operation) => {
+      await engine.init()
+      engine.setLiveDrums(false)
+      engine.setMetronome(false)
+      engine.applyTake(0, Float32Array.of(0.1))
+      engine.applyTake(0, Float32Array.of(0.2))
+      engine.applyTake(1, Float32Array.of(0.3))
+      engine.applyBatch({ pattern: [[true]] })
+      engine.play()
+      const ctx = TestContext.instances[0]
+      ctx.currentTime = 0.5
+      const previous = engine.getState()
+      const project = engine.exportProject()
+      const peaks = engine.getPeaks(0, 10)
+      const originalSources = ctx.bufferSources.slice()
+      if (operation === 'retire') originalSources[1].stop.mockImplementationOnce(() => { throw new Error('stop indisponivel') })
+      const changed = vi.fn()
+      engine.subscribe(changed)
+      const create = ctx.createBufferSource.bind(ctx)
+      let count = 0
+      vi.spyOn(ctx, 'createBufferSource').mockImplementation(() => {
+        count++
+        if (count === 2 && operation === 'create') throw new Error('source indisponivel')
+        const node = create()
+        if (count === 2 && operation === 'connect') node.connect.mockImplementationOnce(() => { throw new Error('connect indisponivel') })
+        if (count === 2 && operation === 'start') node.start.mockImplementationOnce(() => { throw new Error('start indisponivel') })
+        return node
+      })
+      expect(engine.applyBatch({ takes: [
+        { track: 0, samples: Float32Array.of(0.8), source: 'kalimba' },
+        { track: 1, samples: Float32Array.of(0.9), source: 'ocarina' },
+      ], pattern: [[false, true]] })).toBe(false)
+      expect(engine.getState()).toBe(previous)
+      expect(engine.exportProject()).toEqual(project)
+      expect(engine.getPeaks(0, 10)).toBe(peaks)
+      expect(changed).not.toHaveBeenCalled()
+      if (operation === 'retire') {
+        const restored = ctx.bufferSources.at(-1)!
+        expect(restored.start.mock.calls[0][0]).toBeCloseTo(0.52)
+        expect(restored.start.mock.calls[0][1]).toBeCloseTo(0.47)
+        expect(ctx.bufferSources.slice(originalSources.length, -1).every((source) => source.disconnect.mock.calls.length === 1)).toBe(true)
+      } else {
+        for (const source of originalSources) expect(source.stop).not.toHaveBeenCalled()
+        for (const source of ctx.bufferSources.slice(originalSources.length)) expect(source.disconnect).toHaveBeenCalledTimes(1)
+      }
+      engine.undoBatch()
+      expect(engine.getState().pattern.some((row) => row.some(Boolean))).toBe(false)
+      engine.undo(0)
+      expect(engine.getTakeAudio(0)!.samples[0]).toBeCloseTo(0.1)
+    })
+
+    it('aplica tres takes e padrao com uma notificacao e restaura undo individual', async () => {
+      engine.dispose()
+      engine = createEngine({ tracks: 3 })
+      await engine.init()
+      for (let i = 0; i < 3; i++) {
+        engine.applyTake(i, Float32Array.of(0.1 + i))
+        engine.applyTake(i, Float32Array.of(0.2 + i))
+      }
+      engine.setPattern([[true, false]])
+      const previous = engine.exportProject()
+      const changed = vi.fn()
+      engine.subscribe(changed)
+      expect(engine.applyBatch({ takes: [
+        { track: 0, samples: Float32Array.of(0, 1), sampleRate: 50, source: 'ocarina' },
+        { track: 1, samples: Float32Array.of(0.6), source: 'flute' },
+        { track: 2, samples: Float32Array.of(0.7), source: 'bass' },
+      ], pattern: [[false, true]] })).toBe(true)
+      expect(changed).toHaveBeenCalledTimes(1)
+      expect(engine.getState().canUndoBatch).toBe(true)
+      expect(engine.getState().tracks.every((track) => !track.canUndo)).toBe(true)
+      expect(Array.from(engine.getTakeAudio(0)!.samples.slice(0, 5))).toEqual([0, 0.5, 1, 1, 0])
+      engine.undoBatch()
+      expect(changed).toHaveBeenCalledTimes(2)
+      expect(engine.getState().canUndoBatch).toBe(false)
+      expect(engine.exportProject().pattern).toEqual(previous.pattern)
+      for (let i = 0; i < 3; i++) {
+        expect(engine.getTakeAudio(i)!.samples).toEqual(previous.tracks[i].audio)
+        expect(engine.getState().tracks[i]).toMatchObject({ source: 'mic', reverb: 0, canUndo: true })
+        engine.undo(i)
+        expect(engine.getTakeAudio(i)!.samples[0]).toBeCloseTo(0.1 + i)
+      }
+    })
+
+    it.each(['toggleStep', 'setPattern', 'record', 'clear', 'applyTake', 'setBpm', 'setBars', 'removeTrack', 'importProject', 'clearAll', 'dispose'])(
+      'invalida undo composto por %s', async (action) => {
+        await engine.init()
+        engine.setTrack(0, { source: 'ocarina' })
+        expect(engine.applyBatch({ takes: [{ track: 0, samples: Float32Array.of(0.2) }] })).toBe(true)
+        if (action === 'toggleStep') engine.toggleStep(0, 0)
+        else if (action === 'setPattern') engine.setPattern([[true]])
+        else if (action === 'record') engine.record(0)
+        else if (action === 'clear') engine.clear(0)
+        else if (action === 'applyTake') engine.applyTake(0, Float32Array.of(0.5))
+        else if (action === 'setBpm' || action === 'setBars') {
+          engine.clear(0)
+          engine.applyBatch({ pattern: [[true]] })
+          if (action === 'setBpm') engine.setBpm(120)
+          else engine.setBars(1)
+        } else if (action === 'removeTrack') engine.removeTrack(0)
+        else if (action === 'importProject') engine.importProject(engine.exportProject())
+        else if (action === 'clearAll') engine.clearAll()
+        else engine.dispose()
+        expect(engine.getState().canUndoBatch).toBe(false)
+      },
+    )
+
+    it('edicao de canal fora do lote nao invalida o snapshot', async () => {
+      await engine.init()
+      engine.applyBatch({ takes: [{ track: 0, samples: Float32Array.of(0.2) }] })
+      engine.applyTake(1, Float32Array.of(0.3))
+      expect(engine.getState().canUndoBatch).toBe(true)
+      engine.undoBatch()
+      expect(engine.getTakeAudio(0)).toBeNull()
+      expect(engine.getTakeAudio(1)!.samples[0]).toBeCloseTo(0.3)
+    })
+  })
+
   describe('remover e restaurar faixas', () => {
     it('desloca audio, params, nomes, undo e cache; restaura na posicao original', async () => {
       engine.dispose()
@@ -604,6 +844,20 @@ describe('audio sem permissao de microfone', () => {
       expect(engine.getState().tracks[1].reverb).toBe(0)
     })
 
+    it('undo individual restaura reverb anterior do take e do slot vazio', async () => {
+      await engine.init()
+      engine.applyTake(0, Float32Array.of(0.2))
+      engine.applyTake(0, Float32Array.of(0.5), { source: 'ocarina' })
+      expect(engine.getState().tracks[0].reverb).toBe(0.2)
+      engine.undo(0)
+      expect(engine.getState().tracks[0]).toMatchObject({ source: 'mic', reverb: 0 })
+      expect(engine.getTakeAudio(0)!.samples[0]).toBeCloseTo(0.2)
+      engine.applyBatch({ takes: [{ track: 1, samples: Float32Array.of(0.6), source: 'kalimba' }] })
+      expect(engine.getState().tracks[1].reverb).toBe(0.15)
+      engine.undoBatch()
+      expect(engine.getState().tracks[1]).toMatchObject({ status: 'empty', source: 'mic', reverb: 0 })
+    })
+
     it('retorna copias independentes e o sampleRate original do buffer', async () => {
       await engine.init()
       const project = engine.exportProject()
@@ -646,7 +900,7 @@ describe('audio sem permissao de microfone', () => {
       await engine.init()
       engine.applyTake(0, Float32Array.of(0.2), { source: 'ocarina' })
       engine.undo(0)
-      expect(engine.getState().tracks[0]).toMatchObject({ source: 'mic', status: 'empty', canUndo: false })
+      expect(engine.getState().tracks[0]).toMatchObject({ source: 'mic', reverb: 0, status: 'empty', canUndo: false })
       expect(engine.getTakeAudio(0)).toBeNull()
       engine.applyTake(0, Float32Array.of(0.3))
       const previous = engine.getTakeAudio(0)!

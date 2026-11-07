@@ -91,6 +91,14 @@ export function Transport({ state, studio }: { state: EngineState; studio: boole
         Metrônomo
       </button>
 
+      {studio && <div className="transport__live">
+        <button type="button" className="btn btn--toggle" aria-pressed={state.liveDrums} aria-describedby="live-drums-help" onClick={() => {
+          const on = !state.liveDrums
+          engine.setLiveDrums(on)
+          try { localStorage.setItem('loopstudio.liveDrums', on ? '1' : '0') } catch { /* sem persistência */ }
+        }}>Bateria viva</button>
+        <p id="live-drums-help">Viradas a cada 4 compassos e batida mais humana</p>
+      </div>}
       <button type="button" className="btn btn--toggle transport__isolate" aria-pressed={state.isolateRecording} onClick={isolate}>
         Ouvir só a faixa ao gravar
       </button>

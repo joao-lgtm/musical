@@ -1,3 +1,4 @@
+import { BAND_EVENT } from './BatchActions'
 import { takeStyleAnnouncement } from './stylePresets'
 import type { StylePreset } from './stylePresets'
 import { INSTRUMENT_LABEL, isInstrument } from '../audio/types'
@@ -63,6 +64,15 @@ export function GuideBar({ state, onCalibrate }: { state: EngineState; onCalibra
     const timer = setTimeout(() => setMajorTip(false), 12000)
     return () => clearTimeout(timer)
   }, [majorTip])
+  const [bandTip, setBandTip] = useState(false)
+  useEffect(() => {
+    const receive = (event: Event) => {
+      const detail = (event as CustomEvent<{ engine: LoopEngine; active: boolean }>).detail
+      if (detail.engine === engine) setBandTip(detail.active)
+    }
+    window.addEventListener(BAND_EVENT, receive)
+    return () => window.removeEventListener(BAND_EVENT, receive)
+  }, [engine])
   const guide = useRef<HTMLDivElement>(null)
   const pendingFocus = useRef({ wasInside: false, target: 0 })
   const lastPreset = useRef<string | undefined>(undefined)
@@ -179,7 +189,7 @@ export function GuideBar({ state, onCalibrate }: { state: EngineState; onCalibra
 
   const isolated = state.isolateRecording && active >= 0
   const suggestOcarina = layers === 0 || state.mic === 'denied' || state.mic === 'missing'
-  if (!msg && !suggestOcarina && !transformTip && !isolated && !styleTip && !majorTip) return null
+  if (!msg && !suggestOcarina && !transformTip && !isolated && !styleTip && !majorTip && !bandTip) return null
   const offerCal = mics.some((track) => track.status === 'recorded' && track.source === 'mic') && !micUnavailable && state.mic !== 'requesting' && !silentWarning && layers === 1 && recording < 0 && armed < 0 && !offered
   function calibrate() {
     setOffered(true)
@@ -201,6 +211,7 @@ export function GuideBar({ state, onCalibrate }: { state: EngineState; onCalibra
         {label}
       </button>}
       {showingExport && <button type="button" className="btn btn--ghost guide__dismiss" disabled={exportCard.busy} onClick={exportCard.dismiss}>Agora não</button>}
+      {bandTip && <p className="guide__secondary" role="status">Agora é sua vez: cante ou toque uma melodia por cima.</p>}
       {majorTip && <p className="guide__secondary" role="status">Escala maior: agora tem todas as notas do tom (Fá e Si inclusive).</p>}
       {styleTip && <p className="guide__secondary" role="status">Estilo {styleTip.name}: a faixa 1 já está como {INSTRUMENT_LABEL[styleTip.instrument]}. Toque os pads ou troque para Microfone.</p>}
       {isolated && <p className="guide__secondary">Gravando isolada: você ouve só esta faixa e o metrônomo.</p>}

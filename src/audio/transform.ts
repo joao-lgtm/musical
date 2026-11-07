@@ -1,4 +1,5 @@
-import type { Accompaniment } from './harmony'
+import { accompany, progression } from './harmony'
+import type { Accompaniment, ProgressionStyle } from './harmony'
 import { transcribe } from './transcribe'
 import type { Note as TranscribedNote } from './transcribe'
 import { renderNotes } from './synth'
@@ -56,4 +57,33 @@ export async function renderAccompaniment(
     render(acc.bassNotes, opts.bass ?? 'bass', 10 ** (-6 / 20)),
   ])
   return { chords, bass }
+}
+
+interface RenderedBand {
+  chords: string[]
+  chordsAudio: Float32Array
+  bassAudio: Float32Array
+}
+
+export async function completeFromTake(
+  samples: Float32Array, sampleRate: number, bpm: number, bars: 1 | 2 | 4, chordInstrument: Instrument = 'kalimba',
+): Promise<(RenderedBand & { key: Key }) | null> {
+  // A transcricao e cromatica; C e apenas o argumento legado, nao o tom detectado.
+  const notes = await transcribe(samples, sampleRate, bpm, bars, 'C')
+  if (!notes.length) return null
+  const acc = accompany(notes, bpm, bars)
+  const audio = await renderAccompaniment(acc, loopDuration(bpm, bars), sampleRate, { chords: chordInstrument, bass: 'bass' })
+  return { key: acc.key, chords: acc.chords.map(chord => chord.name), chordsAudio: audio.chords, bassAudio: audio.bass }
+}
+
+/** Sem taxa informada, gera em 48 kHz; o sexto argumento permite usar a taxa do motor. */
+export async function bandFromStyle(
+  key: Key, bpm: number, bars: 1 | 2 | 4, style: ProgressionStyle, seed: number, sampleRate = 48000,
+): Promise<RenderedBand & { chordInstrument: Instrument }> {
+  const instruments: readonly Instrument[] = ['kalimba', 'flute', 'ocarina']
+  const choice = ((Math.trunc(Number.isFinite(seed) ? seed : 0) % instruments.length) + instruments.length) % instruments.length
+  const chordInstrument = instruments[choice]
+  const acc = progression(key, bpm, bars, style, seed)
+  const audio = await renderAccompaniment(acc, loopDuration(bpm, bars), sampleRate, { chords: chordInstrument, bass: 'bass' })
+  return { chords: acc.chords.map(chord => chord.name), chordsAudio: audio.chords, bassAudio: audio.bass, chordInstrument }
 }

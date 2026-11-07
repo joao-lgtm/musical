@@ -35,6 +35,10 @@ export default function App() {
   if (state.status === 'ready' && !started) setStarted(true)
   useAutosave(engine, started && state.status === 'ready')
   const ready = state.status === 'ready'
+  useEffect(() => {
+    if (!ready) return
+    try { engine.setLiveDrums(localStorage.getItem('loopstudio.liveDrums') !== '0') } catch { engine.setLiveDrums(true) }
+  }, [engine, ready])
   const [studio, setStudio] = useState(loadStudio)
   const keysRef = useRef<HTMLDialogElement>(null)
   const calRef = useRef<HTMLDialogElement>(null)

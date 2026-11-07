@@ -1,11 +1,13 @@
+import { accompany, progression } from './harmony'
 import type { Accompaniment } from './harmony'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { transcribe } from './transcribe'
 import type { Note } from './transcribe'
 import { renderNotes } from './synth'
 import { loopDuration, stepDuration } from './timing'
-import { renderAccompaniment, stepsToNotes, voiceToInstrument } from './transform'
+import { bandFromStyle, completeFromTake, renderAccompaniment, stepsToNotes, voiceToInstrument } from './transform'
 
+vi.mock('./harmony', () => ({ accompany: vi.fn(), progression: vi.fn() }))
 vi.mock('./transcribe', () => ({ transcribe: vi.fn() }))
 vi.mock('./synth', () => ({ renderNotes: vi.fn() }))
 
@@ -215,5 +217,79 @@ describe('renderAccompaniment', () => {
     const error = new Error('Render falhou')
     vi.mocked(renderNotes).mockRejectedValue(error)
     await expect(renderAccompaniment(accompaniment(), 1, 48000, { chords: 'kalimba' })).rejects.toBe(error)
+  })
+})
+
+describe('completeFromTake e bandFromStyle', () => {
+  function acc(): Accompaniment {
+    return {
+      key: 'D',
+      chords: [
+        { step: 0, length: 8, name: 'D', midis: [62, 66, 69] },
+        { step: 8, length: 8, name: 'A', midis: [61, 64, 69] },
+      ],
+      chordNotes: [{ time: 0, duration: 1, midi: 62 }],
+      bassNotes: [{ time: 0, duration: 0.5, midi: 38 }],
+    }
+  }
+  function mockRender() {
+    vi.mocked(renderNotes).mockResolvedValue({ getChannelData: () => Float32Array.from([0.5, -0.25]) } as unknown as AudioBuffer)
+  }
+  it('retorna null sem notas e nao gera harmonia nem audio', async () => {
+    const input = new Float32Array(2)
+    vi.mocked(transcribe).mockResolvedValue([])
+    expect(await completeFromTake(input, 44100, 120, 1)).toBeNull()
+    expect(transcribe).toHaveBeenCalledExactlyOnceWith(input, 44100, 120, 1, 'C')
+    expect(accompany).not.toHaveBeenCalled()
+    expect(renderNotes).not.toHaveBeenCalled()
+  })
+  it.each(['kalimba', 'flute', 'ocarina'] as const)('completa o take com %s e preserva tom e nomes na ordem', async instrument => {
+    const notes = [{ step: 0.4, length: 2.5, midi: 66 }], harmony = acc()
+    vi.mocked(transcribe).mockResolvedValue(notes)
+    vi.mocked(accompany).mockReturnValue(harmony)
+    mockRender()
+    const result = await completeFromTake(new Float32Array(2), 44100, 100, 2, instrument)
+    expect(accompany).toHaveBeenCalledExactlyOnceWith(notes, 100, 2)
+    expect(result!.key).toBe('D')
+    expect(result!.chords).toEqual(['D', 'A'])
+    expect(renderNotes).toHaveBeenNthCalledWith(1, harmony.chordNotes, 4.8, 44100, instrument)
+    expect(renderNotes).toHaveBeenNthCalledWith(2, harmony.bassNotes, 4.8, 44100, 'bass')
+    expect(result!.chordsAudio).toHaveLength(Math.round(4.8 * 44100))
+    expect(result!.bassAudio).toHaveLength(Math.round(4.8 * 44100))
+  })
+  it('usa kalimba por padrao ao completar', async () => {
+    vi.mocked(transcribe).mockResolvedValue([{ step: 0, length: 2, midi: 62 }])
+    vi.mocked(accompany).mockReturnValue(acc())
+    mockRender()
+    await completeFromTake(new Float32Array(2), 48000, 120, 1)
+    expect(vi.mocked(renderNotes).mock.calls[0][3]).toBe('kalimba')
+  })
+  it.each([1, 2, 4] as const)('gera banda de %i compasso(s) com instrumentos deterministas e buffers a 48kHz', async bars => {
+    const harmony = acc()
+    vi.mocked(progression).mockReturnValue(harmony)
+    mockRender()
+    for (const [seed, instrument] of [[0, 'kalimba'], [1, 'flute'], [2, 'ocarina'], [-1, 'ocarina']] as const) {
+      const result = await bandFromStyle('G', 100, bars, 'funk', seed)
+      expect(progression).toHaveBeenLastCalledWith('G', 100, bars, 'funk', seed)
+      expect(result.chords).toEqual(['D', 'A'])
+      expect(result.chordInstrument).toBe(instrument)
+      expect(result.chordsAudio).toHaveLength(Math.round(bars * 2.4 * 48000))
+      expect(result.bassAudio).toHaveLength(Math.round(bars * 2.4 * 48000))
+      expect(renderNotes).toHaveBeenLastCalledWith(harmony.bassNotes, bars * 2.4, 48000, 'bass')
+      expect(vi.mocked(renderNotes).mock.calls.at(-2)![3]).toBe(instrument)
+    }
+    const a = await bandFromStyle('G', 100, bars, 'funk', 123)
+    const b = await bandFromStyle('G', 100, bars, 'funk', 123)
+    expect(a).toEqual(b)
+    expect(transcribe).not.toHaveBeenCalled()
+  })
+  it('permite gerar a banda na taxa do motor e aceita baixo silencioso', async () => {
+    vi.mocked(progression).mockReturnValue({ ...acc(), bassNotes: [] })
+    mockRender()
+    const result = await bandFromStyle('C', 120, 1, 'lofi', 0, 44100)
+    expect(result.chordsAudio).toHaveLength(88200)
+    expect(result.bassAudio).toHaveLength(88200)
+    expect(result.bassAudio.every(value => value === 0)).toBe(true)
+    expect(renderNotes).toHaveBeenCalledTimes(1)
   })
 })
