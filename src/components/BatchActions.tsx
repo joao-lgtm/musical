@@ -1,3 +1,4 @@
+import { openNoteGrid } from './NoteGrid'
 import { useEffect, useRef, useState } from 'react'
 import { bandFromStyle, completeFromTake } from '../audio/transform'
 import type { ProgressionStyle } from '../audio/harmony'
@@ -42,11 +43,12 @@ export function BatchActions({ track }: { track?: number }) {
         if (empty.length < 2) { setMessage('Preciso de 2 faixas livres para acordes e baixo.'); return }
         const [a, b] = empty
         const ok = engine.applyBatch({ takes: [
-          { track: a, samples: result.chordsAudio, sampleRate: take.sampleRate, source: 'kalimba' },
-          { track: b, samples: result.bassAudio, sampleRate: take.sampleRate, source: 'bass' },
+          { track: a, samples: result.chordsAudio, sampleRate: take.sampleRate, source: 'kalimba', notes: result.chordNotes },
+          { track: b, samples: result.bassAudio, sampleRate: take.sampleRate, source: 'bass', notes: result.bassNotes },
         ] })
         if (!ok) { setMessage('Não deu para aplicar agora. Tente de novo.'); return }
         setApplied(true)
+        openNoteGrid(engine, a); openNoteGrid(engine, b)
         setMessage(`Pronto: acordes ${result.chords.join(' ')} na faixa ${a + 1} e baixo na faixa ${b + 1}. Desfazer volta tudo.`)
       } else {
         const styles: { style: ProgressionStyle; drums: string }[] = [
@@ -60,12 +62,13 @@ export function BatchActions({ track }: { track?: number }) {
         if (!unchanged()) { setMessage('O projeto mudou durante a geração. Tente de novo.'); return }
         const takes: NonNullable<Parameters<LoopEngine['applyBatch']>[0]['takes']> = []
         if (empty.length >= 2) {
-          takes.push({ track: empty[0], samples: result.chordsAudio, sampleRate: 48000, source: result.chordInstrument })
-          takes.push({ track: empty[1], samples: result.bassAudio, sampleRate: 48000, source: 'bass' })
-        } else if (empty.length === 1) takes.push({ track: empty[0], samples: result.bassAudio, sampleRate: 48000, source: 'bass' })
+          takes.push({ track: empty[0], samples: result.chordsAudio, sampleRate: 48000, source: result.chordInstrument, notes: result.chordNotes })
+          takes.push({ track: empty[1], samples: result.bassAudio, sampleRate: 48000, source: 'bass', notes: result.bassNotes })
+        } else if (empty.length === 1) takes.push({ track: empty[0], samples: result.bassAudio, sampleRate: 48000, source: 'bass', notes: result.bassNotes })
         const preset = DRUM_PRESETS.find((p) => p.name === choice.drums)!
         if (!engine.applyBatch({ takes, pattern: toPattern(preset) })) { setMessage('Não deu para aplicar agora. Tente de novo.'); return }
         setApplied(true)
+        for (const take of takes) openNoteGrid(engine, take.track)
         setMessage(empty.length >= 2 ? 'Banda pronta: acordes, baixo e bateria.' : empty.length === 1
           ? 'Baixo e bateria prontos. Faltou espaço para os acordes.' : 'Bateria pronta. Sem faixas livres para acordes e baixo.')
         window.dispatchEvent(new CustomEvent(BAND_EVENT, { detail: { engine, active: true } }))

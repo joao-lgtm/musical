@@ -6,7 +6,7 @@ import { renderNotes } from './synth'
 import type { Note as SynthNote } from './synth'
 import { loopDuration, stepDuration } from './timing'
 import { INSTRUMENT_OCTAVE } from './types'
-import type { Instrument, Key } from './types'
+import type { GridNote, Instrument, Key } from './types'
 
 /** Preserva passos fracionarios da transcricao, sem nova quantizacao. */
 export function stepsToNotes(notes: TranscribedNote[], bpm: number): SynthNote[] {
@@ -16,7 +16,7 @@ export function stepsToNotes(notes: TranscribedNote[], bpm: number): SynthNote[]
 
 export async function voiceToInstrument(
   samples: Float32Array, sampleRate: number, bpm: number, bars: 1 | 2 | 4, key: Key, instrument: Instrument = 'ocarina',
-): Promise<{ notes: TranscribedNote[]; audio: Float32Array | null }> {
+): Promise<{ notes: GridNote[]; audio: Float32Array | null }> {
   const transcribed = await transcribe(samples, sampleRate, bpm, bars, key)
   if (!transcribed.length) return { notes: [], audio: null }
   const pitches = transcribed.map(note => note.midi).sort((a, b) => a - b)
@@ -63,6 +63,13 @@ interface RenderedBand {
   chords: string[]
   chordsAudio: Float32Array
   bassAudio: Float32Array
+  chordNotes: GridNote[]
+  bassNotes: GridNote[]
+}
+
+function notesToGrid(notes: SynthNote[], bpm: number): GridNote[] {
+  const step = stepDuration(bpm)
+  return notes.map(note => ({ step: note.time / step, length: note.duration / step, midi: note.midi }))
 }
 
 export async function completeFromTake(
@@ -73,7 +80,7 @@ export async function completeFromTake(
   if (!notes.length) return null
   const acc = accompany(notes, bpm, bars)
   const audio = await renderAccompaniment(acc, loopDuration(bpm, bars), sampleRate, { chords: chordInstrument, bass: 'bass' })
-  return { key: acc.key, chords: acc.chords.map(chord => chord.name), chordsAudio: audio.chords, bassAudio: audio.bass }
+  return { key: acc.key, chords: acc.chords.map(chord => chord.name), chordsAudio: audio.chords, bassAudio: audio.bass, chordNotes: notesToGrid(acc.chordNotes, bpm), bassNotes: notesToGrid(acc.bassNotes, bpm) }
 }
 
 /** Sem taxa informada, gera em 48 kHz; o sexto argumento permite usar a taxa do motor. */
@@ -85,5 +92,5 @@ export async function bandFromStyle(
   const chordInstrument = instruments[choice]
   const acc = progression(key, bpm, bars, style, seed)
   const audio = await renderAccompaniment(acc, loopDuration(bpm, bars), sampleRate, { chords: chordInstrument, bass: 'bass' })
-  return { chords: acc.chords.map(chord => chord.name), chordsAudio: audio.chords, bassAudio: audio.bass, chordInstrument }
+  return { chords: acc.chords.map(chord => chord.name), chordsAudio: audio.chords, bassAudio: audio.bass, chordNotes: notesToGrid(acc.chordNotes, bpm), bassNotes: notesToGrid(acc.bassNotes, bpm), chordInstrument }
 }

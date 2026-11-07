@@ -1,5 +1,6 @@
+import { CHORD_DEGREES, KEYS } from './types'
 import { describe, expect, it, vi } from 'vitest'
-import { accompany, progression } from './harmony'
+import { accompany, chordPads, progression } from './harmony'
 import type { Note } from './transcribe'
 
 const melody = (midis: number[], step = 0, length = 2): Note[] => midis.map((midi, i) => ({ step: step + i * length, length, midi }))
@@ -139,5 +140,42 @@ describe('progression', () => {
     expect(a.map(note => note.midi)).toEqual([36, 48, 36, 48, 36])
     expect(a.every(note => note.duration === 0.125)).toBe(true)
     expect(b.map(note => note.time)).not.toEqual(a.map(note => note.time))
+  })
+})
+
+describe('chordPads', () => {
+  it.each([
+    ['C', ['Dó', 'Fá', 'Sol', 'Lá m'], [[60, 64, 67], [60, 65, 69], [59, 62, 67], [60, 64, 69]]],
+    ['G', ['Sol', 'Dó', 'Ré', 'Mi m'], [[67, 71, 74], [67, 72, 76], [66, 69, 74], [67, 71, 76]]],
+    ['D', ['Ré', 'Sol', 'Lá', 'Si m'], [[62, 66, 69], [62, 67, 71], [61, 64, 69], [62, 66, 71]]],
+  ] as const)('gera cifras PT e triades de %s na oitava 4', (key, names, midis) => {
+    const pads = chordPads(key, 4)
+    expect(pads.map(pad => pad.degree)).toEqual(CHORD_DEGREES)
+    expect(pads.map(pad => pad.label)).toEqual(['Casa', 'Sobe', 'Tensão', 'Triste'])
+    expect(pads.map(pad => pad.name)).toEqual(names)
+    expect(pads.map(pad => pad.midis)).toEqual(midis)
+  })
+  it('usa sustenidos e sufixo menor curto em portugues', () => {
+    expect(chordPads('A', 4).map(pad => pad.name)).toEqual(['Lá', 'Ré', 'Mi', 'Fá# m'])
+    expect(chordPads('F#', 4).map(pad => pad.name)).toEqual(['Fá#', 'Si', 'Dó#', 'Ré# m'])
+  })
+  it('transpoe a oitava inteira sem mudar inversoes nem conducoes', () => {
+    for (const key of ['C', 'G', 'D'] as const) {
+      const low = chordPads(key, 2), high = chordPads(key, 4)
+      expect(low.map(pad => pad.name)).toEqual(high.map(pad => pad.name))
+      low.forEach((pad, i) => expect(pad.midis).toEqual(high[i].midis.map(midi => midi - 24)))
+    }
+  })
+  it('mantem posicao fechada e movimento por voz ate cinco semitons em todos os tons', () => {
+    for (const key of KEYS) for (const octave of [2, 4, 5]) {
+      const pads = chordPads(key, octave)
+      expect(pads).toHaveLength(4)
+      pads.forEach((pad, i) => {
+        expect(pad.midis).toHaveLength(3)
+        expect(pad.midis[2] - pad.midis[0]).toBeLessThan(12)
+        expect(pad.midis.every(Number.isInteger)).toBe(true)
+        if (i) pad.midis.forEach((midi, voice) => expect(Math.abs(midi - pads[i - 1].midis[voice])).toBeLessThanOrEqual(5))
+      })
+    }
   })
 })

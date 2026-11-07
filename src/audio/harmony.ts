@@ -1,8 +1,8 @@
 import type { Note as MelodyNote } from './transcribe'
 import type { Note as SynthNote } from './synth'
 import { stepDuration } from './timing'
-import { KEYS, STEPS_PER_BAR } from './types'
-import type { Key } from './types'
+import { CHORD_DEGREES, KEYS, STEPS_PER_BAR } from './types'
+import type { ChordDegree, Key } from './types'
 
 export interface Chord { step: number; length: number; name: string; midis: number[] }
 export interface Accompaniment { key: Key; chords: Chord[]; chordNotes: SynthNote[]; bassNotes: SynthNote[] }
@@ -35,12 +35,13 @@ function detectKey(notes: MelodyNote[]): number {
   return best
 }
 
-function voicing(pitches: number[], previous: number[]): number[] {
+function voicing(pitches: number[], previous: number[], octave = 4): number[] {
+  const offset = 12 * (octave - 4)
   let best: number[] = [], cost = Infinity
-  for (let bottom = 52; bottom <= 72; bottom++) {
+  for (let bottom = 52 + offset; bottom <= 72 + offset; bottom++) {
     if (!pitches.includes(pc(bottom))) continue
     const candidate = pitches.map(pitch => bottom + (pitch - pc(bottom) + 12) % 12).sort((a, b) => a - b)
-    if (candidate[2] > 79) continue
+    if (candidate[2] > 79 + offset) continue
     const movement = candidate.reduce((sum, midi, i) => sum + Math.abs(midi - previous[i]), 0)
     if (movement < cost) { best = candidate; cost = movement }
   }
@@ -140,4 +141,20 @@ export function progression(key: Key, bpm: number, bars: 1 | 2 | 4, style: Progr
     })
   }
   return result
+}
+
+export function chordPads(key: Key, octave: number): { degree: ChordDegree; label: string; name: string; midis: number[] }[] {
+  const tonic = KEYS.indexOf(key)
+  const root = 12 * (octave + 1) + tonic
+  const candidates = chordCandidates(tonic)
+  const degrees = [0, 3, 4, 5]
+  const labels = ['Casa', 'Sobe', 'Tensão', 'Triste']
+  const names = ['Dó', 'Dó#', 'Ré', 'Ré#', 'Mi', 'Fá', 'Fá#', 'Sol', 'Sol#', 'Lá', 'Lá#', 'Si']
+  let previous = [root, root + 4, root + 7]
+  return CHORD_DEGREES.map((degree, i) => {
+    const candidate = candidates[degrees[i]]
+    const midis = voicing(candidate.pitches, previous, octave)
+    previous = midis
+    return { degree, label: labels[i], name: names[candidate.root] + (degree === 'vi' ? ' m' : ''), midis }
+  })
 }

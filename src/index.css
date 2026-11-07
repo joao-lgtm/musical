@@ -783,3 +783,33 @@ input[type='range']::-moz-range-thumb { width: 16px; height: 24px; border: 0; bo
   .cue > .batch-actions--band { flex: none; align-self: stretch; }
   .cue__band { width: 100%; }
 }
+
+/* Grade de notas: um compasso por página, zoom e rolagem locais. */
+.seg--edit { display: grid; grid-template-columns: 1fr 1fr; }
+.seg--edit .seg__btn { min-height: 44px; padding: 4px; white-space: normal; }
+.note-grid { display: grid; gap: 8px; min-width: 0; }
+.note-grid__help, .note-grid > p { color: var(--ink-2); font-size: 0.8125rem; }
+.note-grid__tools, .note-grid__warning { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 0.8125rem; }
+.note-grid__tools .btn, .note-grid__warning .btn { min-height: 44px; padding: 6px 8px; white-space: normal; }
+.note-grid__tools label { display: grid; grid-template-columns: auto minmax(60px, 1fr); align-items: center; gap: 8px; width: 100%; }
+.note-grid__tools input { width: 100%; min-height: 44px; }
+.note-grid__warning p { flex-basis: 100%; color: #ffd173; }
+.note-grid__scroll { overflow-x: auto; max-height: 520px; max-width: 100%; border: 1px solid var(--line-2); border-radius: 6px; background: var(--screen); }
+.note-grid__row { display: grid; grid-template-columns: 58px repeat(16, var(--cell)); width: max-content; gap: 2px; padding: 1px; }
+.note-grid__name, .note-grid__ruler > span:first-child { position: sticky; left: 0; z-index: 1; background: var(--panel); font-size: 0.6875rem; padding: 5px 2px; }
+.note-grid__ruler { font-size: 0.6875rem; text-align: center; color: var(--ink-2); }
+.note-grid__row button { min-width: 0; min-height: 24px; padding: 0; border: 0; border-radius: 3px; background: var(--panel-hi); touch-action: pan-y; }
+.note-grid__row button[data-beat] { box-shadow: inset 1px 0 var(--ink-2); }
+.note-grid__row[data-outside] button { background: #101114; }
+.note-grid__row button[aria-pressed='true'] { background: var(--ch-lit); box-shadow: inset 0 1px rgb(255 255 255 / 0.4); }
+.note-grid__row button[data-grid-now] { outline: 1px solid var(--ink); outline-offset: -1px; }
+.note-grid__row button:focus-visible { outline: 2px solid var(--ch1-lit); outline-offset: 1px; position: relative; z-index: 2; }
+@media (prefers-reduced-motion: reduce) { .note-grid__row button { transition: none; animation: none; } }
+
+/* Pads e grade de acordes */
+.seg--pad-mode { width: 100%; }
+.seg--pad-mode .seg__btn { flex: 1; min-height: 44px; }
+.note-pads[data-chords] { grid-template-columns: repeat(2, minmax(44px, 1fr)); }
+.note-pads[data-chords] .note-pad { min-height: 72px; }
+.note-pads[data-chords] strong { display: block; font-size: 1rem; }
+.note-pads[data-chords] small { display: block; margin-top: 4px; font-size: 0.8125rem; }

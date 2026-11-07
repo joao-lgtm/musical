@@ -999,6 +999,267 @@ describe('audio sem permissao de microfone', () => {
       await vi.advanceTimersByTimeAsync(25)
     }
 
+    it('preview cromatico usa contexto/mixer do canal e release apos 250ms', async () => {
+      await engine.init()
+      engine.setTrack(0, { source: 'flute' })
+      engine.previewNote(0, 61)
+      engine.noteOn(0, 0)
+      expect(TestContext.instances).toHaveLength(1)
+      expect(voices.mock.calls[0][2]).toBe(61)
+      expect(voices.mock.calls[0][4]).toBe('flute')
+      expect(voices.mock.calls[0][1]).toBe(voices.mock.calls[1][1])
+      vi.advanceTimersByTime(249)
+      expect(voices.mock.results[0].value.stop).not.toHaveBeenCalled()
+      TestContext.instances[0].currentTime = 0.25
+      vi.advanceTimersByTime(1)
+      expect(voices.mock.results[0].value.stop).toHaveBeenCalledExactlyOnceWith(0.25, 0.06)
+      expect(getUserMedia).not.toHaveBeenCalled()
+    })
+
+    it.each(['stop', 'source'] as const)('preview da kalimba permite corte antecipado por %s', async (action) => {
+      await engine.init()
+      engine.setTrack(0, { source: 'kalimba' })
+      engine.previewNote(0, 61, 1)
+      if (action === 'stop') engine.stop()
+      else engine.setTrack(0, { source: 'bass' })
+      expect(voices.mock.results[0].value.stop).toHaveBeenCalledExactlyOnceWith(0, 0.06)
+      vi.advanceTimersByTime(1000)
+      expect(voices.mock.results[0].value.stop).toHaveBeenCalledTimes(1)
+    })
+
+    it('preview conta na polifonia e fim natural cancela timer', async () => {
+      await engine.init()
+      engine.setTrack(0, { source: 'ocarina' })
+      for (let i = 0; i < 5; i++) engine.previewNote(0, 60 + i)
+      expect(voices.mock.results[0].value.stop).toHaveBeenCalledExactlyOnceWith(0, 0.06)
+      endVoices[1]()
+      vi.advanceTimersByTime(250)
+      expect(voices.mock.results[0].value.stop).toHaveBeenCalledTimes(1)
+      expect(voices.mock.results[1].value.stop).not.toHaveBeenCalled()
+    })
+
+    it.each(['armed', 'recording'] as const)('preview em %s nao entra em held nem no take', async (status) => {
+      const { ctx, start, duration } = await arm()
+      if (status === 'recording') { ctx.currentTime = start + 0.22; vi.advanceTimersByTime(25) }
+      engine.previewNote(0, 61)
+      await finishTake(ctx, start, duration)
+      expect(rendered).not.toHaveBeenCalled()
+      expect(engine.getState().tracks[0]).toMatchObject({ notes: null, silentTake: true })
+    })
+
+    it('preview ignora mic/drums/MIDI invalido e respeita duracao explicita', async () => {
+      await engine.init()
+      engine.previewNote(0, 60)
+      engine.previewNote(2, 60)
+      engine.setTrack(0, { source: 'ocarina' })
+      for (const midi of [NaN, Infinity, -1, 128, 60.5]) engine.previewNote(0, midi)
+      expect(voices).not.toHaveBeenCalled()
+      engine.previewNote(0, 63, 0.1)
+      TestContext.instances[0].currentTime = 0.1
+      vi.advanceTimersByTime(100)
+      expect(voices.mock.results[0].value.stop).toHaveBeenCalledExactlyOnceWith(0.1, 0.06)
+    })
+
+    it('padMode default notes e ignorado no mic; acorde toca e solta tres vozes', async () => {
+      await engine.init()
+      expect(engine.getState().tracks[0].padMode).toBe('notes')
+      engine.setTrack(0, { padMode: 'chords' })
+      expect(engine.getState().tracks[0].padMode).toBe('notes')
+      engine.setTrack(0, { source: 'ocarina', padMode: 'chords' })
+      engine.noteOn(0, 0)
+      engine.noteOn(0, 4)
+      expect(voices.mock.calls.map((call) => call[2])).toEqual([60, 64, 67])
+      expect(new Set(voices.mock.calls.map((call) => call[3])).size).toBe(1)
+      engine.noteOff(0, 0)
+      for (const result of voices.mock.results) expect(result.value.stop).toHaveBeenCalledExactlyOnceWith(0)
+    })
+
+    it('roubo corta o grupo inteiro mais antigo, incluindo caudas soltas', async () => {
+      await engine.init()
+      engine.setTrack(0, { source: 'kalimba', padMode: 'chords' })
+      engine.noteOn(0, 0)
+      engine.noteOff(0, 0)
+      engine.noteOn(0, 1)
+      expect(voices).toHaveBeenCalledTimes(6)
+      for (const result of voices.mock.results.slice(0, 3)) expect(result.value.stop).toHaveBeenLastCalledWith(0, 0.06)
+      for (const result of voices.mock.results.slice(3)) expect(result.value.stop).not.toHaveBeenCalled()
+      engine.noteOn(0, 2)
+      for (const result of voices.mock.results.slice(3, 6)) expect(result.value.stop).toHaveBeenCalledExactlyOnceWith(0, 0.06)
+    })
+
+    it('acorde gravado gera tres GridNotes com inicio e duracao iguais', async () => {
+      const { ctx, start, duration } = await arm()
+      engine.setTrack(0, { padMode: 'chords' })
+      ctx.currentTime = start + 0.22
+      engine.noteOn(0, 0)
+      ctx.currentTime = start + 0.82
+      engine.noteOff(0, 0)
+      await finishTake(ctx, start, duration)
+      const notes = engine.getState().tracks[0].notes!
+      expect(notes.map((note) => note.midi)).toEqual([60, 64, 67])
+      for (const note of notes) {
+        expect(note.step).toBeCloseTo(0.2 / 0.15)
+        expect(note.length).toBeCloseTo(0.6 / 0.15)
+      }
+      expect(rendered.mock.calls[0][0]).toHaveLength(3)
+    })
+
+    it.each(['mode', 'key', 'scale'] as const)('troca de %s corta todo o acorde sem mudar take', async (action) => {
+      await engine.init()
+      engine.applyTake(0, Float32Array.of(0.3), { source: 'ocarina' })
+      engine.setTrack(0, { padMode: 'chords' })
+      const audio = engine.getTakeAudio(0)
+      engine.noteOn(0, 0)
+      if (action === 'mode') engine.setTrack(0, { padMode: 'notes' })
+      else if (action === 'key') engine.setKey('D')
+      else engine.setScale('major')
+      for (const result of voices.mock.results) expect(result.value.stop).toHaveBeenCalledExactlyOnceWith(0, 0.06)
+      expect(engine.getTakeAudio(0)).toEqual(audio)
+    })
+
+    it('export/import preservam padMode e projeto antigo ou invalido usa notes', async () => {
+      await engine.init()
+      engine.setTrack(0, { source: 'ocarina', padMode: 'chords' })
+      const project = engine.exportProject()
+      expect(project.tracks[0].padMode).toBe('chords')
+      engine.setTrack(0, { padMode: 'notes' })
+      engine.importProject(project)
+      expect(engine.getState().tracks[0].padMode).toBe('chords')
+      delete project.tracks[0].padMode
+      engine.importProject(project)
+      expect(engine.getState().tracks[0].padMode).toBe('notes')
+      Object.assign(project.tracks[0], { padMode: 'invalido' })
+      engine.importProject(project)
+      expect(engine.getState().tracks[0].padMode).toBe('notes')
+    })
+
+    it('grade renderiza steps em segundos, guarda copia e undo restaura notas', async () => {
+      await engine.init()
+      engine.setTrack(0, { source: 'ocarina' })
+      const previous = [{ step: 0, length: 1, midi: 60 }]
+      engine.applyTake(0, Float32Array.of(0.7), { notes: previous })
+      const notes = [{ step: 2, length: 3, midi: 65 }]
+      expect(await engine.setTrackNotes(0, notes)).toBe(true)
+      expect(rendered.mock.calls[0][0]).toEqual([{ time: 0.3, duration: 0.44999999999999996, midi: 65 }])
+      expect(rendered.mock.calls[0][3]).toBe('ocarina')
+      expect(engine.getState().tracks[0].notes).toEqual(notes)
+      notes[0].midi = 90
+      expect(engine.getState().tracks[0].notes![0].midi).toBe(65)
+      expect(engine.setBpm(120)).toBe(false)
+      engine.undo(0)
+      expect(engine.getState().tracks[0].notes).toEqual(previous)
+      expect(engine.getTakeAudio(0)!.samples[0]).toBeCloseTo(0.7)
+    })
+
+    it('ultimo pedido da grade vence mesmo resolvendo antes do primeiro', async () => {
+      await engine.init()
+      engine.setTrack(0, { source: 'kalimba' })
+      const old = [{ step: 0, length: 1, midi: 60 }]
+      engine.applyTake(0, Float32Array.of(0.6), { notes: old })
+      const first = deferred<AudioBuffer>()
+      const last = deferred<AudioBuffer>()
+      rendered.mockReturnValueOnce(first.promise).mockReturnValueOnce(last.promise)
+      const p1 = engine.setTrackNotes(0, [{ step: 1, length: 1, midi: 62 }])
+      const latest = [{ step: 3, length: 2, midi: 67 }]
+      const p2 = engine.setTrackNotes(0, latest)
+      const buffer = new TestBuffer({ numberOfChannels: 1, length: 480, sampleRate: 100 }) as unknown as AudioBuffer
+      last.resolve(buffer)
+      expect(await p2).toBe(true)
+      first.resolve(buffer)
+      expect(await p1).toBe(false)
+      expect(engine.getState().tracks[0].notes).toEqual(latest)
+      engine.undo(0)
+      expect(engine.getState().tracks[0].notes).toEqual(old)
+      expect(engine.getTakeAudio(0)!.samples[0]).toBeCloseTo(0.6)
+    })
+
+    it('lista vazia limpa audio/notas, mantem source e pode ser desfeita', async () => {
+      await engine.init()
+      engine.setTrack(0, { source: 'flute' })
+      const notes = [{ step: 1, length: 2, midi: 74 }]
+      engine.applyTake(0, Float32Array.of(0.3), { notes })
+      expect(await engine.setTrackNotes(0, [])).toBe(true)
+      expect(rendered).not.toHaveBeenCalled()
+      expect(engine.getState().tracks[0]).toMatchObject({ status: 'empty', source: 'flute', notes: null, canUndo: true })
+      expect(engine.getTakeAudio(0)).toBeNull()
+      engine.undo(0)
+      expect(engine.getState().tracks[0].notes).toEqual(notes)
+    })
+
+    it('render pendente nao sobrepoe limpeza nem troca de fonte com ida e volta', async () => {
+      await engine.init()
+      engine.setTrack(0, { source: 'ocarina' })
+      const first = deferred<AudioBuffer>()
+      rendered.mockReturnValueOnce(first.promise)
+      const pending = engine.setTrackNotes(0, [{ step: 0, length: 1, midi: 60 }])
+      engine.setTrack(0, { source: 'flute' })
+      engine.setTrack(0, { source: 'ocarina' })
+      first.resolve(new TestBuffer({ numberOfChannels: 1, length: 480, sampleRate: 100 }) as unknown as AudioBuffer)
+      expect(await pending).toBe(false)
+      const second = deferred<AudioBuffer>()
+      rendered.mockReturnValueOnce(second.promise)
+      const p2 = engine.setTrackNotes(0, [{ step: 0, length: 1, midi: 60 }])
+      await engine.setTrackNotes(0, [])
+      second.resolve(new TestBuffer({ numberOfChannels: 1, length: 480, sampleRate: 100 }) as unknown as AudioBuffer)
+      expect(await p2).toBe(false)
+      expect(engine.getState().tracks[0].notes).toBeNull()
+      expect(engine.getTakeAudio(0)).toBeNull()
+    })
+
+    it('recusa mic/drums/armed e falha de render sem alterar take', async () => {
+      await engine.init()
+      const notes = [{ step: 0, length: 1, midi: 60 }]
+      expect(await engine.setTrackNotes(0, notes)).toBe(false)
+      expect(await engine.setTrackNotes(2, notes)).toBe(false)
+      engine.setTrack(0, { source: 'ocarina' })
+      engine.record(0)
+      expect(await engine.setTrackNotes(0, notes)).toBe(false)
+      engine.stop()
+      engine.applyTake(0, Float32Array.of(0.5), { notes })
+      const before = engine.getState()
+      rendered.mockRejectedValueOnce(new Error('render indisponivel'))
+      expect(await engine.setTrackNotes(0, [{ step: 1, length: 1, midi: 62 }])).toBe(false)
+      expect(engine.getState()).toBe(before)
+    })
+
+    it('applyBatch/undoBatch e remove/restore preservam notas; apply sem notes zera metadados', async () => {
+      await engine.init()
+      const original = [{ step: 0, length: 1, midi: 60 }]
+      engine.applyTake(0, Float32Array.of(0.2), { source: 'ocarina', notes: original })
+      const changed = [{ step: 2, length: 2, midi: 64 }]
+      engine.applyBatch({ takes: [{ track: 0, samples: Float32Array.of(0.4), source: 'kalimba', notes: changed }] })
+      expect(engine.getState().tracks[0].notes).toEqual(changed)
+      engine.undoBatch()
+      expect(engine.getState().tracks[0].notes).toEqual(original)
+      engine.removeTrack(0)
+      expect(engine.getState().tracks[1].notes).toBeNull()
+      engine.restoreTrack()
+      expect(engine.getState().tracks[0].notes).toEqual(original)
+      engine.applyTake(0, Float32Array.of(0.5))
+      expect(engine.getState().tracks[0].notes).toBeNull()
+      engine.undo(0)
+      expect(engine.getState().tracks[0].notes).toEqual(original)
+      engine.clearAll()
+      expect(engine.getState().tracks.every((track) => track.notes === null)).toBe(true)
+    })
+
+    it('exporta notas independentes e importa somente notas validas de instrumento', async () => {
+      await engine.init()
+      const notes = [{ step: 0.5, length: 1.5, midi: 65 }]
+      engine.applyTake(0, Float32Array.of(0.3), { source: 'ocarina', notes })
+      const data = engine.exportProject()
+      Object.assign(data.tracks[0].notes![0], { midi: 99 })
+      expect(engine.getState().tracks[0].notes).toEqual(notes)
+      Object.assign(data.tracks[0], { notes: [...notes, { step: NaN, length: 1, midi: 60 }, { step: 1, length: 0, midi: 60 }, { step: 1, length: 1, midi: Infinity }, null] })
+      Object.assign(data.tracks[1], { audio: Float32Array.of(0.2), source: 'mic', notes })
+      engine.importProject(data)
+      expect(engine.getState().tracks[0].notes).toEqual(notes)
+      expect(engine.getState().tracks[1].notes).toBeNull()
+      delete data.tracks[0].notes
+      engine.importProject(data)
+      expect(engine.getState().tracks[0].notes).toBeNull()
+    })
+
     it.each(['stop', 'source', 'remove', 'dispose'] as const)('corta cauda solta da kalimba com %s', async (action) => {
       await engine.init()
       engine.setTrack(0, { source: 'kalimba' })
@@ -1211,6 +1472,9 @@ describe('audio sem permissao de microfone', () => {
       expect(note.time).toBeCloseTo(0.25)
       expect(note.duration).toBeCloseTo(0.5)
       expect(note.midi).toBe(60)
+      expect(engine.getState().tracks[0].notes![0].step).toBeCloseTo(0.25 / 0.15)
+      expect(engine.getState().tracks[0].notes![0].length).toBeCloseTo(0.5 / 0.15)
+      expect(engine.getState().tracks[0].notes![0].midi).toBe(60)
       expect(rendered.mock.calls[0][0]).toHaveLength(1)
       expect(engine.getState().tracks[0]).toMatchObject({ status: 'recorded', canUndo: true, silentTake: false })
       expect(engine.exportProject().tracks[0].audio![0]).toBeCloseTo(0.2)
@@ -1228,6 +1492,7 @@ describe('audio sem permissao de microfone', () => {
       await finishTake(ctx, start, duration)
       expect(rendered).toHaveBeenCalledTimes(1)
       expect(rendered.mock.calls[0][0][0].duration).toBe(0)
+      expect(engine.getState().tracks[0].notes![0].length).toBeGreaterThan(0)
       expect(engine.getState().tracks[0]).toMatchObject({ status: 'recorded', silentTake: false })
     })
 
@@ -1236,7 +1501,7 @@ describe('audio sem permissao de microfone', () => {
       ctx.currentTime = start - 0.1
       engine.noteOn(0, 0)
       expect(engine.getState().tracks[0].status).toBe('armed')
-      engine.setKey('D')
+      engine.setKey('C')
       ctx.currentTime = start + 0.22
       vi.advanceTimersByTime(25)
       expect(engine.getState().tracks[0].status).toBe('recording')

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { hzToMidi, major, midiToHz, padNotes, pentatonic, quantizeToScale } from './scale'
+import { hzToMidi, major, midiToHz, padNotes, pentatonic, quantizeToScale, scalePitchClasses, snapToScale } from './scale'
 import { KEYS } from './types'
 
 describe('scale', () => {
@@ -31,5 +31,20 @@ describe('escala maior dos pads', () => {
     expect(padNotes('C', 'pentatonic')).toEqual(pentatonic('C', 8, 4))
     expect(padNotes('G', 'major', 2)[0]).toBe(43)
     expect(padNotes('C', 'major')).toHaveLength(10)
+  })
+})
+
+describe('encaixar na escala', () => {
+  it('classes da escala', () => {
+    expect(scalePitchClasses('C', 'pentatonic')).toEqual([0, 2, 4, 7, 9])
+    expect(scalePitchClasses('D', 'major')).toEqual([2, 4, 6, 7, 9, 11, 1])
+  })
+
+  it('nota na escala não muda; fora dela vai para a mais próxima, empate para baixo', () => {
+    expect(snapToScale(64, 'C', 'major')).toBe(64) // Mi
+    expect(snapToScale(66, 'C', 'major')).toBe(65) // Fá# → Fá (empate Fá/Sol → baixo)
+    expect(snapToScale(65, 'C', 'pentatonic')).toBe(64) // Fá → Mi
+    expect(snapToScale(71, 'C', 'pentatonic')).toBe(72) // Si → Dó de cima
+    expect(snapToScale(61, 'C', 'pentatonic')).toBe(60) // Dó# → Dó (empate → baixo)
   })
 })

@@ -1,3 +1,4 @@
+import { openNoteGrid } from './NoteGrid'
 import { INSTRUMENTS, INSTRUMENT_LABEL } from '../audio/types'
 import type { Instrument } from '../audio/types'
 import { useEffect, useRef, useState } from 'react'
@@ -71,8 +72,9 @@ export function TransformMenu({ track }: { track: number }) {
         if (!result.audio) {
           if (isCurrent()) setMessage('Não encontramos melodia nesse take. Tente cantar mais alto e uma nota por vez.')
         } else {
-          engine.applyTake(target, result.audio, { sampleRate: take.sampleRate, source: kind })
+          engine.applyTake(target, result.audio, { sampleRate: take.sampleRate, source: kind, notes: result.notes })
           const applied = engine.getState().tracks[target]
+          if (isCurrent() && applied?.revision > targetRevision && applied.source === kind) openNoteGrid(engine, target)
           if (isCurrent()) setMessage(applied?.revision > targetRevision && applied.source === kind
             ? `Pronto: a faixa ${target + 1} virou ${INSTRUMENT_LABEL[kind]}.`
             : 'Não deu para aplicar agora. Tente de novo.')
