@@ -5,6 +5,8 @@ import type { CSSProperties } from 'react'
 import type { EngineState } from '../audio/types'
 import { useEngine } from '../hooks/useEngine'
 import { PlayIcon } from './Icons'
+import { STYLES, applyStyle } from './stylePresets'
+import type { StylePreset } from './stylePresets'
 import { DEMO_PRESET, toPattern } from './drumPresets'
 
 export function StartScreen({ state }: { state: EngineState }) {
@@ -27,7 +29,7 @@ export function StartScreen({ state }: { state: EngineState }) {
   const busy = state.status === 'initializing'
   const failed = state.status === 'error'
 
-  async function start(resume = false) {
+  async function start(resume = false, style?: StylePreset) {
     try {
       await engine.init()
       if (resume && draft) {
@@ -35,6 +37,7 @@ export function StartScreen({ state }: { state: EngineState }) {
         engine.play()
         return
       }
+      if (style) { applyStyle(engine, style); return }
       const current = engine.getState()
       // Só oferece a batida inicial em uma mesa vazia; projetos abertos são preservados.
       if (current.tracks.every((t) => t.status === 'empty') && !current.pattern.some((row) => row.some(Boolean))) {
@@ -63,6 +66,11 @@ export function StartScreen({ state }: { state: EngineState }) {
             <PlayIcon size={20} />
             {busy ? 'Preparando o áudio…' : failed ? 'Tentar de novo' : draft ? 'Continuar de onde parou' : 'Começar a tocar'}
           </button>
+          <div className="start__styles" role="group" aria-labelledby="style-label">
+            <p id="style-label">Ou comece por um estilo:</p>
+            <div>{STYLES.map((style) => <button type="button" className="btn btn--ghost" key={style.name}
+              aria-pressed={false} disabled={busy} onClick={() => start(false, style)}>{style.name}</button>)}</div>
+          </div>
           <p className="start__draft" aria-live="polite">
             {draft ? `${layers} ${layers === 1 ? 'camada' : 'camadas'}, ${draft.bpm} BPM` : ''}
           </p>

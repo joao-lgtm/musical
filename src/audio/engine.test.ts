@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest'
 import { createEngine } from './engine'
 import * as synth from './synth'
+import { INSTRUMENTS } from './types'
 
 describe('nomes das faixas', () => {
   it('inclui os nomes padrão no estado e nos projetos exportados', () => {
@@ -577,6 +578,32 @@ describe('audio sem permissao de microfone', () => {
       expect(engine.getState().tracks[1].reverb).toBe(0)
     })
 
+    it.each(INSTRUMENTS)('default de reverb para %s ao trocar source e aplicar take', async (instrument) => {
+      await engine.init()
+      const expected = { ocarina: 0.2, flute: 0.2, kalimba: 0.15, bass: 0 }[instrument]
+      engine.setTrack(0, { source: instrument })
+      expect(engine.getState().tracks[0].reverb).toBe(expected)
+      engine.applyTake(1, Float32Array.of(0.2), { source: instrument })
+      expect(engine.getState().tracks[1].reverb).toBe(expected)
+      engine.setTrack(0, { reverb: 0.6 })
+      engine.setTrack(0, { source: 'mic' })
+      engine.setTrack(0, { source: instrument })
+      expect(engine.getState().tracks[0].reverb).toBe(0.6)
+    })
+
+    it('import invalido volta para mic e preserva instrumentos conhecidos', async () => {
+      await engine.init()
+      engine.setTrack(0, { source: 'bass' })
+      const project = engine.exportProject()
+      Object.assign(project.tracks[0], { source: 'desconhecido' })
+      project.tracks[1].source = 'flute'
+      Object.assign(project.tracks[1], { reverb: 0 })
+      engine.importProject(project)
+      expect(engine.getState().tracks[0].source).toBe('mic')
+      expect(engine.getState().tracks[1].source).toBe('flute')
+      expect(engine.getState().tracks[1].reverb).toBe(0)
+    })
+
     it('retorna copias independentes e o sampleRate original do buffer', async () => {
       await engine.init()
       const project = engine.exportProject()
@@ -691,8 +718,14 @@ describe('audio sem permissao de microfone', () => {
   describe('ocarina', () => {
     let voices: MockInstance<typeof synth.startVoice>
     let rendered: MockInstance<typeof synth.renderNotes>
+    let endVoices: (() => void)[]
     beforeEach(() => {
-      voices = vi.spyOn(synth, 'startVoice').mockImplementation(() => ({ stop: vi.fn() }))
+      endVoices = []
+      voices = vi.spyOn(synth, 'startVoice').mockImplementation(() => {
+        let ended = () => {}
+        endVoices.push(() => ended())
+        return { stop: vi.fn(), onEnded: (callback) => { ended = callback } }
+      })
       rendered = vi.spyOn(synth, 'renderNotes').mockImplementation(async (notes, duration, sampleRate) => {
         const buffer = new TestBuffer({ numberOfChannels: 1, length: Math.ceil(duration * sampleRate), sampleRate })
         if (notes.length) buffer.getChannelData(0).fill(0.2)
@@ -711,6 +744,114 @@ describe('audio sem permissao de microfone', () => {
       ctx.currentTime = start + duration + 0.021
       await vi.advanceTimersByTimeAsync(25)
     }
+
+    it.each(['stop', 'source', 'remove', 'dispose'] as const)('corta cauda solta da kalimba com %s', async (action) => {
+      await engine.init()
+      engine.setTrack(0, { source: 'kalimba' })
+      engine.noteOn(0, 0)
+      engine.noteOff(0, 0)
+      const voice = voices.mock.results[0].value
+      expect(voice.stop).toHaveBeenCalledWith(0)
+      if (action === 'stop') engine.stop()
+      else if (action === 'source') engine.setTrack(0, { source: 'ocarina' })
+      else if (action === 'remove') engine.removeTrack(0)
+      else engine.dispose()
+      expect(voice.stop).toHaveBeenLastCalledWith(0, 0.06)
+    })
+
+    it('conta caudas soltas ao roubar a quinta e a sexta voz', async () => {
+      await engine.init()
+      engine.setTrack(0, { source: 'kalimba' })
+      for (let i = 0; i < 6; i++) {
+        engine.noteOn(0, 0)
+        engine.noteOff(0, 0)
+      }
+      expect(voices.mock.results[0].value.stop).toHaveBeenLastCalledWith(0, 0.06)
+      expect(voices.mock.results[1].value.stop).toHaveBeenLastCalledWith(0, 0.06)
+      expect(voices.mock.results[2].value.stop).toHaveBeenCalledTimes(1)
+      endVoices[2]()
+      engine.noteOn(0, 1)
+      expect(voices.mock.results[3].value.stop).toHaveBeenCalledTimes(1)
+    })
+
+    it('nao recaptura kalimba terminada naturalmente com tecla ainda pressionada', async () => {
+      await engine.init()
+      engine.setTrack(0, { source: 'kalimba' })
+      engine.record(0)
+      const ctx = TestContext.instances[0]
+      const start = ctx.currentTime - 0.02 + engine.getArmedIn(0)!
+      engine.noteOn(0, 0)
+      ctx.currentTime = 1.51
+      endVoices[0]()
+      await finishTake(ctx, start, engine.getState().loopDuration)
+      expect(rendered).not.toHaveBeenCalled()
+      expect(engine.getState().tracks[0].silentTake).toBe(true)
+    })
+
+    it('fechamento do take corta tambem cauda cuja tecla foi solta', async () => {
+      await engine.init()
+      engine.setTrack(0, { source: 'kalimba' })
+      engine.record(0)
+      const ctx = TestContext.instances[0]
+      const start = ctx.currentTime - 0.02 + engine.getArmedIn(0)!
+      ctx.currentTime = start + 0.22
+      engine.noteOn(0, 0)
+      engine.noteOff(0, 0)
+      await finishTake(ctx, start, engine.getState().loopDuration)
+      expect(voices.mock.results[0].value.stop).toHaveBeenLastCalledWith(ctx.currentTime, 0.06)
+      expect(engine.getState().tracks[0].status).toBe('recorded')
+    })
+
+    it('fim de voz antiga nao solta outra nota na mesma tecla; ocarina continua capturavel', async () => {
+      const { ctx, start, duration } = await arm()
+      engine.noteOn(0, 0)
+      engine.noteOff(0, 0)
+      engine.noteOn(0, 0)
+      endVoices[0]()
+      ctx.currentTime = start + 0.22
+      vi.advanceTimersByTime(25)
+      engine.noteOff(0, 0)
+      await finishTake(ctx, start, duration)
+      expect(rendered.mock.calls[0][0]).toHaveLength(1)
+      expect(rendered.mock.calls[0][0][0]).toMatchObject({ time: 0, midi: 60 })
+    })
+
+    it.each(INSTRUMENTS)('pads usam oitava e timbre de %s', async (instrument) => {
+      await engine.init()
+      engine.setTrack(0, { source: instrument })
+      engine.noteOn(0, 0)
+      const expected = { ocarina: 60, flute: 72, kalimba: 60, bass: 36 }[instrument]
+      expect(voices.mock.calls[0][2]).toBe(expected)
+      expect(voices.mock.calls[0][4]).toBe(instrument)
+      engine.noteOff(0, 0)
+      expect(voices.mock.results[0].value.stop).toHaveBeenCalled()
+      expect(getUserMedia).not.toHaveBeenCalled()
+    })
+
+    it.each(INSTRUMENTS)('renderiza o take com o timbre %s', async (instrument) => {
+      await engine.init()
+      engine.setTrack(0, { source: instrument })
+      engine.record(0)
+      const ctx = TestContext.instances[0]
+      const start = ctx.currentTime - 0.02 + engine.getArmedIn(0)!
+      ctx.currentTime = start + 0.22
+      engine.noteOn(0, 0)
+      await finishTake(ctx, start, engine.getState().loopDuration)
+      expect(rendered.mock.calls[0][3]).toBe(instrument)
+      expect(engine.getState().tracks[0]).toMatchObject({ source: instrument, status: 'recorded' })
+    })
+
+    it('trocar instrumento solta voz com rampa sem alterar take existente', async () => {
+      await engine.init()
+      engine.applyTake(0, Float32Array.of(0.2), { source: 'flute' })
+      const audio = engine.getTakeAudio(0)
+      engine.noteOn(0, 0)
+      engine.setTrack(0, { source: 'kalimba' })
+      expect(voices.mock.results[0].value.stop).toHaveBeenCalledWith(0, 0.06)
+      expect(engine.getTakeAudio(0)).toEqual(audio)
+      engine.noteOn(0, 0)
+      expect(voices.mock.calls[1][4]).toBe('kalimba')
+    })
 
     it('removeTrack solta as vozes ao vivo', async () => {
       await engine.init()

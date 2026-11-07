@@ -66,7 +66,7 @@ describe('voiceToInstrument', () => {
     expect(renderNotes).toHaveBeenCalledExactlyOnceWith([
       { time: 0.3, duration: 0.6, midi: 62 },
       { time: 1.5, duration: 0.3, midi: 69 },
-    ], loopDuration(100, bars), 48000)
+    ], loopDuration(100, bars), 48000, 'ocarina')
     expect(getChannelData).toHaveBeenCalledExactlyOnceWith(0)
     expect(result.notes).toEqual(notes)
     expect(result.audio).toBeInstanceOf(Float32Array)
@@ -76,6 +76,25 @@ describe('voiceToInstrument', () => {
     expect(samples).toEqual(Float32Array.from([0.25, -0.25]))
   })
 
+  it.each([
+    ['bass', -24], ['flute', 12], ['ocarina', 0],
+  ] as const)('adapta a melodia para %s somente por oitavas', async (instrument, shift) => {
+    const notes: Note[] = [{ step: 0.4, length: 1.5, midi: 60 }, { step: 2, length: 2, midi: 64 }, { step: 5, length: 1, midi: 67 }]
+    const original = structuredClone(notes)
+    vi.mocked(transcribe).mockResolvedValue(notes)
+    rendered(new Float32Array(1))
+    const result = await voiceToInstrument(new Float32Array(1), 48000, 120, 1, 'C', instrument)
+    const shifted = notes.map(note => ({ ...note, midi: note.midi + shift }))
+    expect(result.notes).toEqual(shifted)
+    expect(renderNotes).toHaveBeenCalledExactlyOnceWith(stepsToNotes(shifted, 120), 2, 48000, instrument)
+    expect(notes).toEqual(original)
+  })
+  it.each([['bass', 36], ['flute', 72], ['ocarina', 60]] as const)('posiciona C4 em %s sem fracionar a altura', async (instrument, midi) => {
+    vi.mocked(transcribe).mockResolvedValue([{ step: 0, length: 2, midi: 60 }])
+    rendered(new Float32Array(1))
+    const result = await voiceToInstrument(new Float32Array(1), 48000, 120, 1, 'C', instrument)
+    expect(result.notes[0].midi).toBe(midi)
+  })
   it('recorta o frame excedente do renderer no comprimento arredondado do loop', async () => {
     const bpm = 137, sampleRate = 44100
     const exact = loopDuration(bpm, 1) * sampleRate

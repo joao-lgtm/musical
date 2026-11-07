@@ -1,5 +1,7 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
+import { INSTRUMENTS, INSTRUMENT_LABEL, isInstrument } from '../audio/types'
+import type { Instrument, TrackSource } from '../audio/types'
 import type { TrackState } from '../audio/types'
 import { readFrame, useEngine, useEngineState, useFrame } from '../hooks/useEngine'
 import { Fader } from './Fader'
@@ -9,7 +11,7 @@ import { TransformMenu } from './TransformMenu'
 import { TrackName } from './TrackName'
 import { VuMeter } from './VuMeter'
 import { Waveform } from './Waveform'
-import { NotePads, rememberOcarina } from './NotePads'
+import { NotePads, rememberInstrument } from './NotePads'
 import { FX_KNOBS } from './fx'
 
 type Props = {
@@ -28,6 +30,8 @@ const STATUS = { empty: 'Vazia', armed: 'Armada', recording: 'Gravando', recorde
 
 export function Channel({ index, track, transportPlaying, studio, hint, dimmed, collapsible }: Props) {
   const engine = useEngine()
+  const [lastInstrument, setLastInstrument] = useState<Instrument>(() => isInstrument(track.source) ? track.source : 'ocarina')
+  useEffect(() => { if (isInstrument(track.source)) setLastInstrument(track.source) }, [track.source])
   const engineState = useEngineState(engine)
   const { mic, micTrack } = engineState
   const anyRecording = engineState.tracks.some((t) => t.status === 'armed' || t.status === 'recording')
@@ -78,7 +82,7 @@ export function Channel({ index, track, transportPlaying, studio, hint, dimmed, 
       data-status={status}
       data-muted={muted || undefined}
       data-dim={dimmed || undefined}
-      data-collapsible={(collapsible && !micFailed && track.source !== 'ocarina') || undefined}
+      data-collapsible={(collapsible && !micFailed && !isInstrument(track.source)) || undefined}
       style={{ '--ch': `var(--ch${n})`, '--ch-lit': `var(--ch${n}-lit)` } as CSSProperties}
       aria-labelledby={`ch${n}-name`}
     >
@@ -88,11 +92,19 @@ export function Channel({ index, track, transportPlaying, studio, hint, dimmed, 
         <span className="strip__status" role="status">{statusText}</span>
       </header>
 
-      <div className="seg seg--source" role="group" aria-label={`Fonte de som, faixa ${n}`}>
-        <button className="seg__btn" aria-pressed={track.source === 'mic'} onClick={() => engine.setTrack(index, { source: 'mic' })}>Microfone</button>
-        <button className="seg__btn" aria-pressed={track.source === 'ocarina'} onClick={() => { rememberOcarina(engine, index); engine.setTrack(index, { source: 'ocarina' }) }}>Ocarina</button>
-      </div>
-      {track.source === 'ocarina' && <NotePads track={index} />}
+      <label className="source-select">
+        <span className="field__label">Fonte de som</span>
+        <select aria-label={`Fonte de som, faixa ${n}`} value={track.source} onChange={(e) => {
+          const source = e.target.value as TrackSource
+          if (isInstrument(source)) { setLastInstrument(source); rememberInstrument(engine, index) }
+          engine.setTrack(index, { source })
+        }}>
+          <option value="mic">Microfone</option>
+          {INSTRUMENTS.map((source) => <option key={source} value={source}>{INSTRUMENT_LABEL[source]}</option>)}
+        </select>
+        {track.source === 'mic' && <small>Último instrumento: {INSTRUMENT_LABEL[lastInstrument]}</small>}
+      </label>
+      {isInstrument(track.source) && <NotePads key={`${index}:${track.source}`} track={index} />}
       <div className="screen">
         <Waveform track={index} status={status} muted={muted} revision={track.revision} />
         {status === 'empty' && <span className="screen__hint">Vazia</span>}

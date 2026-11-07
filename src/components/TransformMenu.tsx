@@ -1,3 +1,5 @@
+import { INSTRUMENTS, INSTRUMENT_LABEL } from '../audio/types'
+import type { Instrument } from '../audio/types'
 import { useEffect, useRef, useState } from 'react'
 import { voiceToInstrument } from '../audio/transform'
 import { detectDrums } from '../audio/beatbox'
@@ -24,7 +26,7 @@ export function TransformMenu({ track }: { track: number }) {
     document.addEventListener('pointerdown', outside)
     return () => document.removeEventListener('pointerdown', outside)
   }, [open])
-  async function transform(kind: 'replace' | 'drums') {
+  async function transform(kind: Instrument | 'drums') {
     if (processing.current) return
     const take = engine.getTakeAudio(track)
     if (!take) { setMessage('Esse take não está mais disponível.'); setOpen(false); trigger.current?.focus(); return }
@@ -33,7 +35,7 @@ export function TransformMenu({ track }: { track: number }) {
     const operation = generation.current
     const sourceRevision = snapshot.tracks[track].revision
     const targetRevision = snapshot.tracks[target].revision
-    const expectedStatus = kind === 'replace' ? 'recorded' : snapshot.tracks[target].status
+    const expectedStatus = kind !== 'drums' ? 'recorded' : snapshot.tracks[target].status
     const isCurrent = () => generation.current === operation
     const canApply = () => {
       if (!isCurrent()) return false
@@ -64,15 +66,15 @@ export function TransformMenu({ track }: { track: number }) {
             : 'Não deu para aplicar agora. Tente de novo.')
         }
       } else {
-        const result = await voiceToInstrument(take.samples, take.sampleRate, snapshot.bpm, snapshot.bars, snapshot.key)
+        const result = await voiceToInstrument(take.samples, take.sampleRate, snapshot.bpm, snapshot.bars, snapshot.key, kind)
         if (!canApply()) return
         if (!result.audio) {
           if (isCurrent()) setMessage('Não encontramos melodia nesse take. Tente cantar mais alto e uma nota por vez.')
         } else {
-          engine.applyTake(target, result.audio, { sampleRate: take.sampleRate, source: 'ocarina' })
+          engine.applyTake(target, result.audio, { sampleRate: take.sampleRate, source: kind })
           const applied = engine.getState().tracks[target]
-          if (isCurrent()) setMessage(applied?.revision > targetRevision && applied.source === 'ocarina'
-            ? `Pronto: a faixa ${target + 1} virou ocarina. Use desfazer para ouvir sua voz de novo.`
+          if (isCurrent()) setMessage(applied?.revision > targetRevision && applied.source === kind
+            ? `Pronto: a faixa ${target + 1} virou ${INSTRUMENT_LABEL[kind]}.`
             : 'Não deu para aplicar agora. Tente de novo.')
         }
       }
@@ -94,7 +96,7 @@ export function TransformMenu({ track }: { track: number }) {
     </button>}
     {open && <div ref={panel} id={`transform-${track}`} className="transform__panel" role="group" aria-label={`Transformar faixa ${track + 1}`}
       onKeyDown={(e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); setOpen(false); trigger.current?.focus() } }}>
-      <button type="button" onClick={() => { void transform('replace') }}>Em ocarina</button>
+      {INSTRUMENTS.map((instrument) => <button key={instrument} type="button" onClick={() => { void transform(instrument) }}>Em {INSTRUMENT_LABEL[instrument].toLocaleLowerCase('pt-BR')}</button>)}
       <button type="button" onClick={() => { void transform('drums') }}>Em bateria</button>
     </div>}
     <p className="transform__status" role="status">{message}</p>

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { noteWindow, renderNotes, startVoice } from './synth'
+import { INSTRUMENTS } from './types'
 
 describe('noteWindow', () => {
   it('preserva inicio e duracao com cauda de 90ms', () => {
@@ -34,7 +35,7 @@ describe('noteWindow', () => {
 function context() {
   const nodes: { disconnect: ReturnType<typeof vi.fn> }[] = []
   function parameter() {
-    return { value: 0, setValueAtTime: vi.fn(), linearRampToValueAtTime: vi.fn(), cancelScheduledValues: vi.fn() }
+    return { value: 0, setValueAtTime: vi.fn(), linearRampToValueAtTime: vi.fn(), exponentialRampToValueAtTime: vi.fn(), cancelScheduledValues: vi.fn() }
   }
   function node() {
     const result = {
@@ -148,6 +149,25 @@ describe('voz Web Audio', () => {
     for (const node of nodes.slice(1)) expect(node.disconnect).toHaveBeenCalledTimes(1)
   })
 
+  it('corte forcado encurta release ja iniciado sem salto no ganho', () => {
+    const { ctx } = context()
+    const voice = startVoice(ctx as unknown as BaseAudioContext, ctx.destination as unknown as AudioNode, 60, 0)
+    voice.stop(0)
+    ctx.currentTime = 0.12
+    voice.stop(0.12, 0.02)
+    voice.stop(0.13, 0.02)
+    const envelope = ctx.createGain.mock.results[7].value
+    const ramps = envelope.gain.linearRampToValueAtTime.mock.calls
+    expect(ramps.at(-2)![0]).toBeCloseTo(0.2 * (0.18 - 0.12) / 0.09)
+    expect(ramps.at(-2)![1]).toBe(0.12)
+    expect(ramps.at(-1)![0]).toBe(0)
+    expect(ramps.at(-1)![1]).toBeCloseTo(0.14)
+    for (const result of ctx.createOscillator.mock.results) {
+      expect(result.value.stop).toHaveBeenCalledTimes(2)
+      expect(result.value.stop.mock.calls.at(-1)![0]).toBeCloseTo(0.14)
+    }
+  })
+
   it('soltar a voz no mesmo frame mantem 90ms antes do release', () => {
     const { ctx } = context()
     const voice = startVoice(ctx as unknown as BaseAudioContext, ctx.destination as unknown as AudioNode, 60, 0)
@@ -178,5 +198,143 @@ describe('voz Web Audio', () => {
     for (const result of ctx.createOscillator.mock.results) expect(result.value.stop).toHaveBeenCalledWith(2)
     expect(ctx.startRendering).toHaveBeenCalledTimes(1)
     expect(buffer).toEqual({ rendered: true })
+  })
+})
+
+
+describe('presets de instrumento', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('flauta tem mais ar, segundo harmonico, ataque lento e vibrato antecipado', () => {
+    const { ctx } = context()
+    const voice = startVoice(ctx as unknown as BaseAudioContext, ctx.destination as unknown as AudioNode, 69, 1, 'flute')
+    const gains = ctx.createGain.mock.results.map(result => result.value)
+    const [second, , , air, , depth, , envelope] = gains
+    expect(second.gain.value).toBe(0.12)
+    expect(air.gain.value).toBe(0.035)
+    expect(ctx.createBiquadFilter.mock.results[0].value.type).toBe('bandpass')
+    expect(envelope.gain.linearRampToValueAtTime).toHaveBeenCalledWith(0.18, 1.06)
+    expect(depth.gain.setValueAtTime).toHaveBeenCalledWith(0, 1.12)
+    voice.stop(1.2)
+    expect(envelope.gain.linearRampToValueAtTime).toHaveBeenLastCalledWith(0, 1.2 + 0.12)
+  })
+
+  it('kalimba tem parciais inarmonicos, clique e decaimentos mais curtos nos parciais', () => {
+    const { ctx } = context()
+    startVoice(ctx as unknown as BaseAudioContext, ctx.destination as unknown as AudioNode, 69, 0, 'kalimba')
+    const tones = ctx.createOscillator.mock.results.map(result => result.value)
+    expect(tones.map(tone => tone.frequency.value)).toEqual([440, 440 * 5.4, 440 * 8.9])
+    const [upper, highest, air, click, envelope] = ctx.createGain.mock.results.map(result => result.value)
+    expect(upper.gain.value).toBe(0.15)
+    expect(highest.gain.value).toBe(0.07)
+    expect(upper.gain.exponentialRampToValueAtTime).toHaveBeenCalledWith(0.0001, 0.3)
+    expect(highest.gain.exponentialRampToValueAtTime).toHaveBeenCalledWith(0.0001, 0.15)
+    expect(air.gain.value).toBe(0)
+    expect(click.gain.setValueAtTime).toHaveBeenCalledWith(0.08, 0)
+    expect(click.gain.linearRampToValueAtTime).toHaveBeenCalledWith(0, 0.012)
+    expect(envelope.gain.linearRampToValueAtTime).toHaveBeenCalledWith(0.18, 0.003)
+    expect(envelope.gain.exponentialRampToValueAtTime).toHaveBeenCalledWith(0.0001, 1.5)
+    expect(envelope.gain.linearRampToValueAtTime).toHaveBeenLastCalledWith(0, 1.51)
+    expect(tones).toHaveLength(3)
+    for (const tone of tones) expect(tone.detune.linearRampToValueAtTime).not.toHaveBeenCalled()
+  })
+
+  it('kalimba ignora noteOff mas permite corte explicito com rampa durante o decaimento', () => {
+    const { ctx } = context()
+    const voice = startVoice(ctx as unknown as BaseAudioContext, ctx.destination as unknown as AudioNode, 60, 0, 'kalimba')
+    const envelope = ctx.createGain.mock.results.at(-1)!.value
+    const sources = [...ctx.createOscillator.mock.results, ...ctx.createBufferSource.mock.results].map(result => result.value)
+    voice.stop(0)
+    voice.stop(0.1)
+    expect(envelope.gain.cancelScheduledValues).not.toHaveBeenCalled()
+    for (const source of sources) expect(source.stop.mock.calls).toEqual([[1.51]])
+    voice.stop(0.2, 0.02)
+    voice.stop(0.3, 0.02)
+    expect(envelope.gain.cancelScheduledValues).toHaveBeenCalledExactlyOnceWith(0.2)
+    const level = envelope.gain.setValueAtTime.mock.calls.at(-1)![0] as number
+    expect(level).toBeGreaterThan(0)
+    expect(level).toBeLessThan(0.18)
+    expect(envelope.gain.linearRampToValueAtTime).toHaveBeenLastCalledWith(0, 0.22)
+    for (const source of sources) expect(source.stop.mock.calls).toEqual([[1.51], [0.22]])
+  })
+
+  it('baixo sustenta os harmonicos e fecha o filtro em 150ms sem vibrato', () => {
+    const { ctx } = context()
+    const voice = startVoice(ctx as unknown as BaseAudioContext, ctx.destination as unknown as AudioNode, 36, 0, 'bass')
+    const tones = ctx.createOscillator.mock.results.map(result => result.value)
+    expect(tones).toHaveLength(3)
+    expect(tones[1].frequency.value).toBe(tones[0].frequency.value * 2)
+    expect(tones[2].frequency.value).toBe(tones[0].frequency.value * 3)
+    const [second, third, envelope] = ctx.createGain.mock.results.map(result => result.value)
+    expect(second.gain.value).toBe(0.22)
+    expect(third.gain.value).toBe(0.08)
+    expect(4 * 0.17 * (1 + second.gain.value + third.gain.value)).toBeLessThan(1)
+    expect(envelope.gain.linearRampToValueAtTime).toHaveBeenCalledWith(0.17, 0.008)
+    expect(envelope.gain.exponentialRampToValueAtTime).not.toHaveBeenCalled()
+    const filter = ctx.createBiquadFilter.mock.results[0].value
+    expect(filter.type).toBe('lowpass')
+    expect(filter.Q.value).toBe(0.5)
+    expect(filter.frequency.setValueAtTime).toHaveBeenCalledWith(2200, 0)
+    expect(filter.frequency.exponentialRampToValueAtTime).toHaveBeenCalledWith(500, 0.15)
+    expect(envelope.connect).toHaveBeenCalledWith(filter)
+    expect(filter.connect).toHaveBeenCalledWith(ctx.destination)
+    expect(ctx.createBufferSource).not.toHaveBeenCalled()
+    for (const tone of tones) expect(tone.stop).not.toHaveBeenCalled()
+    voice.stop(0)
+    expect(envelope.gain.setValueAtTime).toHaveBeenLastCalledWith(0.17, 0.09)
+    expect(envelope.gain.linearRampToValueAtTime).toHaveBeenLastCalledWith(0, 0.09 + 0.08)
+  })
+
+  it.each(INSTRUMENTS)('%s desconecta todos os nos somente depois da ultima fonte', instrument => {
+    const { ctx, nodes } = context()
+    const voice = startVoice(ctx as unknown as BaseAudioContext, ctx.destination as unknown as AudioNode, 60, 0, instrument)
+    const ended = vi.fn()
+    voice.onEnded(ended)
+    if (instrument !== 'kalimba') voice.stop(0.1)
+    const sources = [...ctx.createOscillator.mock.results, ...ctx.createBufferSource.mock.results].map(result => result.value)
+    for (const source of sources.slice(0, -1)) source.onended!()
+    expect(ended).not.toHaveBeenCalled()
+    for (const node of nodes.slice(1)) expect(node.disconnect).not.toHaveBeenCalled()
+    sources.at(-1)!.onended!()
+    expect(ended).toHaveBeenCalledTimes(1)
+    const late = vi.fn()
+    voice.onEnded(late)
+    expect(late).toHaveBeenCalledTimes(1)
+    for (const node of nodes.slice(1)) expect(node.disconnect).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([
+    ['ocarina', 6, 0.38], ['flute', 6, 0.41], ['kalimba', 3, 1.71], ['bass', 3, 0.37],
+  ] as const)('renderNotes usa %s e sua cauda propria com nota instantanea', async (instrument, oscillators, end) => {
+    const { ctx } = context()
+    const Offline = vi.fn(function () { return ctx })
+    vi.stubGlobal('OfflineAudioContext', Offline)
+    await renderNotes([{ time: 0.2, duration: 0, midi: 60 }], 2, 48000, instrument)
+    expect(Offline).toHaveBeenCalledWith(1, 96000, 48000)
+    expect(ctx.createOscillator).toHaveBeenCalledTimes(oscillators)
+    for (const result of ctx.createOscillator.mock.results) expect(result.value.stop.mock.calls.at(-1)![0]).toBeCloseTo(end)
+    expect(ctx.startRendering).toHaveBeenCalledOnce()
+  })
+
+  it.each(INSTRUMENTS)('renderNotes recorta a cauda de %s na borda do loop com rampa', async instrument => {
+    const { ctx } = context()
+    vi.stubGlobal('OfflineAudioContext', vi.fn(function () { return ctx }))
+    await renderNotes([{ time: 1.99, duration: 1, midi: 60 }], 2, 48000, instrument)
+    for (const result of ctx.createOscillator.mock.results) expect(result.value.stop.mock.calls.at(-1)![0]).toBe(2)
+    const envelope = ctx.createGain.mock.results.at(-1)!.value
+    expect(envelope.gain.linearRampToValueAtTime).toHaveBeenLastCalledWith(0, 2)
+  })
+
+  it('ocarina explicita e default preservam o mesmo grafo e envelopes', () => {
+    const graphs = [undefined, 'ocarina' as const].map(instrument => {
+      const { ctx } = context()
+      startVoice(ctx as unknown as BaseAudioContext, ctx.destination as unknown as AudioNode, 69, 1, instrument).stop(1.4)
+      return {
+        tones: ctx.createOscillator.mock.results.map(({ value }) => [value.frequency.value, value.detune.setValueAtTime.mock.calls]),
+        gains: ctx.createGain.mock.results.map(({ value }) => [value.gain.value, value.gain.setValueAtTime.mock.calls, value.gain.linearRampToValueAtTime.mock.calls]),
+        filters: ctx.createBiquadFilter.mock.results.map(({ value }) => [value.type, value.frequency.value, value.Q.value]),
+      }
+    })
+    expect(graphs[0]).toEqual(graphs[1])
   })
 })
