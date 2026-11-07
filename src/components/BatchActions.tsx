@@ -3,6 +3,7 @@ import { bandFromStyle, completeFromTake } from '../audio/transform'
 import type { ProgressionStyle } from '../audio/harmony'
 import type { LoopEngine } from '../audio/types'
 import { useEngine, useEngineState } from '../hooks/useEngine'
+import { DiceIcon } from './Icons'
 import { DRUM_PRESETS, toPattern } from './drumPresets'
 
 export const BAND_EVENT = 'loopstudio:band-ready'
@@ -77,9 +78,11 @@ export function BatchActions({ track }: { track?: number }) {
     }
   }
   const eligible = track === undefined || state.tracks[track]?.status === 'recorded'
-  return <div className="batch-actions">
-    {(eligible || busy) && <button type="button" className="btn btn--ghost" aria-busy={busy || undefined}
+  return <div className={track === undefined ? 'batch-actions batch-actions--band' : 'batch-actions'}>
+    {(eligible || busy) && <button type="button" className={track === undefined ? 'btn cue__band' : 'btn btn--ghost'}
+      aria-label={track === undefined ? 'Gera bateria, baixo e harmonia nas faixas livres' : undefined} aria-busy={busy || undefined}
       aria-disabled={busy || state.status !== 'ready' || undefined} onClick={() => { if (!busy && state.status === 'ready') void generate() }}>
+      {track === undefined && <DiceIcon size={18} />}
       {busy ? 'Gerando…' : track === undefined ? 'Surpreenda-me com a banda' : 'Completar (acordes + baixo)'}
     </button>}
     <p role="status">{message}</p>

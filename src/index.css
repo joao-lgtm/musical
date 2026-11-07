@@ -558,15 +558,15 @@ input[type='range']::-moz-range-thumb { width: 16px; height: 24px; border: 0; bo
 /* faixa-guia + "Surpreenda-me" compacto */
 .cue { display: flex; align-items: stretch; gap: 10px; }
 .cue .guide { flex: 1; min-width: 0; }
-.cue__surprise {
+.cue__band {
   margin-left: auto; align-self: center; min-height: 44px;
   background: linear-gradient(100deg, var(--ch1-lit), var(--ch7-lit) 55%, var(--ch3-lit));
   color: var(--on-color); font-weight: 800; box-shadow: 0 6px 20px -8px var(--ch7-lit);
 }
-.cue__surprise:hover:not(:disabled) { background: linear-gradient(100deg, var(--ch1-lit), var(--ch7-lit) 55%, var(--ch3-lit)); filter: brightness(1.08); }
+.cue__band:hover:not(:disabled) { background: linear-gradient(100deg, var(--ch1-lit), var(--ch7-lit) 55%, var(--ch3-lit)); filter: brightness(1.08); }
 @media (max-width: 720px) {
   .cue { flex-direction: column; }
-  .cue__surprise { margin-left: 0; align-self: stretch; }
+  .cue__band { margin-left: 0; align-self: stretch; }
   /* Estúdio no celular: canais vazios além do próximo ficam só com cabeçalho + Gravar */
   .strip[data-collapsible] > :not(.strip__head):not(.rec) { display: none; }
 }
@@ -775,3 +775,11 @@ input[type='range']::-moz-range-thumb { width: 16px; height: 24px; border: 0; bo
 .transport__live .btn { min-height: 44px; white-space: normal; }
 .transport__live p { max-width: 26ch; color: var(--ink-2); font-size: 0.75rem; }
 @media (max-width: 720px) { .transport__live { grid-column: 1 / -1; } }
+
+/* Banda em destaque global; sorteio de bateria fica no sequenciador. */
+.cue > .batch-actions--band { flex: 0 1 320px; align-self: center; min-width: 0; }
+.cue__band { min-height: 44px; white-space: normal; }
+@media (max-width: 720px) {
+  .cue > .batch-actions--band { flex: none; align-self: stretch; }
+  .cue__band { width: 100%; }
+}

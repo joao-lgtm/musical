@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { DRUM_VOICES, STEPS_PER_BAR, type DrumVoice } from '../audio/types'
 import { useEngine, useEngineState, useFrame } from '../hooks/useEngine'
-import { BatchActions } from './BatchActions'
+import { DiceIcon } from './Icons'
 import { DEMO_PRESET, surprise, toPattern } from './drumPresets'
 import s from './Sequencer.module.css'
 
@@ -96,15 +96,9 @@ export function Sequencer({ coachStep = null }: { coachStep?: number | null }) {
         <h2 id="seq-title" className={s.title}>Bateria</h2>
         <div className={s.actions}>
           <span className={s.picked} role="status">{picked && <>Tocando <b>{picked}</b></>}</span>
-          <button type="button" className={s.surprise} onClick={onSurprise} disabled={!ready}>
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <rect x="3.5" y="3.5" width="17" height="17" rx="3" />
-              <circle cx="8.5" cy="8.5" r="1.3" fill="currentColor" />
-              <circle cx="15.5" cy="8.5" r="1.3" fill="currentColor" />
-              <circle cx="8.5" cy="15.5" r="1.3" fill="currentColor" />
-              <circle cx="15.5" cy="15.5" r="1.3" fill="currentColor" />
-            </svg>
-            Surpreenda-me
+          <button type="button" className={s.btn} title="Sorteia só o padrão de bateria" aria-label="Sorteia só o padrão de bateria" onClick={onSurprise} disabled={!ready}>
+            <DiceIcon size={18} />
+            Sortear batida
           </button>
           <button type="button" className={`${s.btn} ${s.padRec}`} aria-pressed={padRec} onClick={() => setPadRec((on) => !on)} disabled={!ready} title={state.playing ? undefined : 'Dê play para gravar os pads'}>
             <span className={s.padRecDot} aria-hidden="true" />
@@ -120,7 +114,6 @@ export function Sequencer({ coachStep = null }: { coachStep?: number | null }) {
         </div>
       </header>
 
-      <BatchActions />
       <div className={s.pads} role="group" aria-label="Pads ao vivo" data-rec={padRec || undefined}>
         {DRUM_VOICES.map((voice, v) => (
           <button
