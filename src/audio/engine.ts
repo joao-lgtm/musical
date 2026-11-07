@@ -144,7 +144,7 @@ function buildMix(c: BaseAudioContext, count: number): Mix {
 }
 
 /** t = null: valores imediatos (offline); senão rampa curta a partir de t. */
-function applyMix(mix: Mix, s: EngineState, t: number | null) {
+function applyMix(mix: Mix, s: EngineState, t: number | null, master = true) {
   const set = (p: AudioParam, v: number) => {
     if (t === null) p.value = v
     else p.setTargetAtTime(v, t, 0.01)
@@ -158,7 +158,7 @@ function applyMix(mix: Mix, s: EngineState, t: number | null) {
     set(c.dSend.gain, tr.delay)
     set(c.rSend.gain, tr.reverb)
   })
-  set(mix.master.gain, s.masterVolume)
+  if (master) set(mix.master.gain, s.masterVolume)
   set(mix.delay.delayTime, delayTime(s.bpm))
 }
 
@@ -194,6 +194,14 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
   let ctx: AudioContext | null = null
   let stream: MediaStream | null = null
   let worklet: AudioWorkletNode | null = null
+  let inputSource: MediaStreamAudioSourceNode | null = null
+  let inputAnalyser: AnalyserNode | null = null
+  let micPromise: Promise<boolean> | null = null
+  let pendingMicCleanup: (() => void) | null = null
+  let micGen = 0
+  let hasPlayed = false
+  let fadeStart = 0
+  let fadeEnd = 0
   let mix: Mix | null = null
   let analysers: AnalyserNode[] = [] // N canais + master
   let outDest: MediaStreamAudioDestinationNode | null = null
@@ -229,6 +237,9 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
   let state: EngineState = {
     status: 'idle',
     error: null,
+    mic: 'off',
+    micError: null,
+    micTrack: null,
     bpm: 100,
     bars: 2,
     metronome: true,
@@ -269,7 +280,17 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
   const locked = () => state.tracks.some((t) => t.kind === 'mic' && t.status !== 'empty')
   const outLatency = () => (ctx ? (ctx.baseLatency || 0) + (ctx.outputLatency || 0) : 0)
   const rev = (i: number) => state.tracks[i].revision + 1
-  const remix = () => ctx && mix && applyMix(mix, state, ctx.currentTime)
+  function remix() {
+    if (!ctx || !mix) return
+    const now = ctx.currentTime
+    applyMix(mix, state, now, false)
+    if (now < fadeEnd) {
+      const gain = mix.master.gain
+      gain.cancelScheduledValues(now)
+      gain.setValueAtTime(state.masterVolume * Math.max(0, (now - fadeStart) / (fadeEnd - fadeStart)), now)
+      gain.linearRampToValueAtTime(state.masterVolume, fadeEnd)
+    } else mix.master.gain.setTargetAtTime(state.masterVolume, now, 0.01)
+  }
 
   function startSource(i: number, when: number) {
     const old = sources[i]
@@ -466,6 +487,7 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
 
   function stopAll() {
     skippedSteps.clear()
+    if (state.micTrack !== null) set({ micTrack: null })
     abortCalib()
     clearInterval(timer)
     timer = undefined
@@ -485,9 +507,8 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
     pendingCleanup?.()
     pendingCleanup = null
     stopAll()
-    releaseStream(stream)
-    stream = null
-    worklet = null
+    releaseMic()
+    set({ mic: 'off', micError: null, micTrack: null })
     mix = null
     analysers = []
     outDest = null
@@ -520,36 +541,118 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
     if (ctx === ac && ac.state !== 'running') fail(new Error('Áudio pausado pelo navegador'))
   }
 
-  async function start() {
-    const my = ++gen
-    let c: AudioContext | null = null
+  function releaseMic() {
+    micGen++
+    pendingMicCleanup?.()
+    pendingMicCleanup = null
+    micPromise = null
+    inputSource?.disconnect()
+    inputAnalyser?.disconnect()
+    if (worklet) {
+      worklet.port.onmessage = null
+      worklet.port.close()
+      worklet.disconnect()
+    }
+    releaseStream(stream)
+    stream = null
+    worklet = null
+    inputSource = null
+    inputAnalyser = null
+    inputLatency = 0
+  }
+
+  async function requestMic(): Promise<boolean> {
+    const my = ++micGen
+    const c = ctx!
     let s: MediaStream | null = null
-    // idempotente por recurso: chamada de novo após o getUserMedia tardio libera o stream
+    let node: AudioWorkletNode | null = null
+    let source: MediaStreamAudioSourceNode | null = null
+    let analyser: AnalyserNode | null = null
     const abandon = () => {
       releaseStream(s)
-      if (c && c.state !== 'closed') c.close().catch(() => {})
+      source?.disconnect()
+      analyser?.disconnect()
+      if (node) {
+        node.port.onmessage = null
+        node.port.close()
+        node.disconnect()
+      }
     }
-    pendingCleanup = abandon
-    const lost = () => {
-      if (my !== gen) return
-      teardown()
-      set({ status: 'error', error: 'Microfone desconectado' })
-    }
-    set({ status: 'initializing', error: null })
+    pendingMicCleanup = abandon
+    set({ mic: 'requesting', micError: null })
     try {
-      c = new AudioContext({ latencyHint: 'interactive' })
       s = await navigator.mediaDevices.getUserMedia({
         audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 1 },
       })
-      if (my !== gen) return abandon()
+      if (my !== micGen || !ready()) { abandon(); return false }
       const track = s.getAudioTracks()[0]
+      const lost = () => {
+        if (my !== micGen) return
+        for (let i = 0; i < n; i++) if (recs[i]) cancelRec(i)
+        abortCalib()
+        releaseMic()
+        set({ mic: 'missing', micError: 'Microfone desconectado' })
+      }
       if (track) track.onended = lost
       await c.audioWorklet.addModule(workletUrl)
-      if (my !== gen) return abandon()
-      const node = new AudioWorkletNode(c, 'recorder', { channelCount: 1, channelCountMode: 'explicit' })
+      if (my !== micGen || !ready()) { abandon(); return false }
+      if (track?.readyState !== 'live') throw new Error('Microfone desconectado')
+      node = new AudioWorkletNode(c, 'recorder', { channelCount: 1, channelCountMode: 'explicit' })
       node.port.onmessage = (e) => onBlock(e.data)
-      c.createMediaStreamSource(s).connect(node)
-      node.connect(c.destination) // saída silenciosa; só garante que o nó seja processado
+      source = c.createMediaStreamSource(s)
+      analyser = c.createAnalyser()
+      analyser.fftSize = scratch.length
+      source.connect(analyser)
+      source.connect(node)
+      node.connect(c.destination)
+      inputLatency = (track.getSettings() as { latency?: number }).latency ?? 0
+      pendingMicCleanup = null
+      stream = s
+      worklet = node
+      inputSource = source
+      inputAnalyser = analyser
+      set({ mic: 'ready', micError: null })
+      const pending = state.micTrack
+      if (pending !== null && ready() && state.mic === 'ready') {
+        set({ micTrack: null })
+        record(pending)
+      }
+      return ready() && state.mic === 'ready'
+    } catch (e) {
+      abandon()
+      if (my === micGen && ready()) {
+        pendingMicCleanup = null
+        const denied = e instanceof Error && e.name === 'NotAllowedError'
+        set({ mic: denied ? 'denied' : 'missing', micError: errMsg(e) })
+      }
+      return false
+    }
+  }
+
+  function ensureMic(): Promise<boolean> {
+    if (!ready()) return Promise.resolve(false)
+    if (micPromise) return micPromise
+    if (state.mic === 'ready') return Promise.resolve(true)
+    let settle!: (value: boolean) => void
+    const promise = new Promise<boolean>((resolve) => { settle = resolve })
+    micPromise = promise
+    void requestMic().then((ok) => {
+      if (micPromise === promise) micPromise = null
+      settle(ok)
+    })
+    return promise
+  }
+
+  async function start() {
+    const my = ++gen
+    let c: AudioContext | null = null
+    const abandon = () => {
+      if (c && c.state !== 'closed') void c.close().catch(() => {})
+    }
+    pendingCleanup = abandon
+    set({ status: 'initializing', error: null })
+    try {
+      c = new AudioContext({ latencyHint: 'interactive' })
       const m = buildMix(c, N)
       const an = [...m.ch.map((ch) => ch.out), m.master].map((src) => {
         const a = c!.createAnalyser()
@@ -562,19 +665,13 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
       m.master.connect(dest)
       await c.resume()
       if (my !== gen) return abandon()
-      if (track?.readyState !== 'live') throw new Error('Microfone desconectado')
-
-      // commit: daqui em diante os recursos são do engine
       pendingCleanup = null
-      inputLatency = (track.getSettings() as { latency?: number }).latency ?? 0
       const ac = c
       ac.onstatechange = () => {
         const st = ac.state as string
         if (ready() && (st === 'suspended' || st === 'interrupted')) void onSuspended(ac)
       }
       ctx = c
-      stream = s
-      worklet = node
       mix = m
       analysers = an
       outDest = dest
@@ -649,6 +746,10 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
   async function calibrate(opts: { clicks?: number; onClick?: (i: number) => void } = {}): Promise<CalibrationResult | null> {
     if (!ready()) throw new Error('Engine não está pronto')
     if (busy()) throw new Error('Calibração em andamento')
+    set({ micTrack: null })
+    if (!(await ensureMic()) || !ready()) return null
+    if (state.tracks.some((track) => track.status === 'armed' || track.status === 'recording')) return null
+    if (busy()) throw new Error('Calibração em andamento')
     stopAll()
     const c = ctx!
     void resume()
@@ -683,12 +784,50 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
     })
   }
 
+  function record(i: number) {
+    if (!valid(i) || i === D || busy()) return
+    if (state.mic !== 'ready') {
+      if (state.mic === 'requesting' && state.micTrack === i) {
+        set({ micTrack: null })
+        return
+      }
+      set({ micTrack: i })
+      void ensureMic()
+      return
+    }
+    const c = ctx!
+    void resume()
+    if (recs[i]) return cancelRec(i)
+    const previousUndo = undoTake[i]
+    const overdub = state.tracks[i].overdubbing && !!buffers[i]
+    if (!overdub) {
+      undoTake[i] = buffers[i] // substituir descarta o take ao armar (evita vazar no microfone)
+      dropTrack(i)
+    }
+    if (!state.playing) startTransport(true)
+    const sr = c.sampleRate
+    const latency = captureLatency(outLatency(), inputLatency, state.latencyOffset)
+    const start = recordStart(c.currentTime, t0, state.loopDuration, latency)
+    recs[i] = {
+      start,
+      startFrame: timeToFrame(start, sr, latency),
+      data: new Float32Array(Math.ceil(state.loopDuration * sr)),
+      filled: 0,
+      overdub,
+      previousUndo,
+    }
+    syncWorklet()
+    patchTrack(i, { status: 'armed', silentTake: false, canUndo: undoTake[i] !== undefined, revision: overdub ? state.tracks[i].revision : rev(i) })
+  }
+
   return {
     init() {
       if (state.status === 'disposed') return Promise.reject(new Error('Engine descartado'))
       if (!initPromise || state.status === 'error') initPromise = start()
       return initPromise
     },
+
+    ensureMic,
 
     dispose() {
       if (state.status === 'disposed') return
@@ -719,38 +858,19 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
     play() {
       if (!ready() || busy() || state.playing) return
       void resume()
+      if (!hasPlayed) {
+        hasPlayed = true
+        fadeStart = ctx!.currentTime
+        fadeEnd = fadeStart + 0.8
+        remix()
+      }
       startTransport(false)
     },
     stop() {
       if (ready() && !busy()) stopAll()
     },
 
-    record(i) {
-      if (!valid(i) || i === D || busy()) return
-      const c = ctx!
-      void resume()
-      if (recs[i]) return cancelRec(i)
-      const previousUndo = undoTake[i]
-      const overdub = state.tracks[i].overdubbing && !!buffers[i]
-      if (!overdub) {
-        undoTake[i] = buffers[i] // substituir descarta o take ao armar (evita vazar no microfone)
-        dropTrack(i)
-      }
-      if (!state.playing) startTransport(true)
-      const sr = c.sampleRate
-      const latency = captureLatency(outLatency(), inputLatency, state.latencyOffset)
-      const start = recordStart(c.currentTime, t0, state.loopDuration, latency)
-      recs[i] = {
-        start,
-        startFrame: timeToFrame(start, sr, latency),
-        data: new Float32Array(Math.ceil(state.loopDuration * sr)),
-        filled: 0,
-        overdub,
-        previousUndo,
-      }
-      syncWorklet()
-      patchTrack(i, { status: 'armed', silentTake: false, canUndo: undoTake[i] !== undefined, revision: overdub ? state.tracks[i].revision : rev(i) })
-    },
+    record,
 
     clear,
     clearAll() {
@@ -845,6 +965,14 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
         levels[i] = Math.max(vuLevel(peak), levels[i] * 0.85) // queda suave
       })
       return levels
+    },
+
+    getInputLevel() {
+      if (state.mic !== 'ready' || !inputAnalyser) return 0
+      inputAnalyser.getFloatTimeDomainData(scratch)
+      let peak = 0
+      for (const sample of scratch) peak = Math.max(peak, Math.abs(sample))
+      return vuLevel(peak)
     },
 
     getOutputStream: () => outDest?.stream ?? null,

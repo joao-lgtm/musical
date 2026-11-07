@@ -124,11 +124,11 @@ export default function App() {
         {state.status !== 'ready' && (
           <div className="alert" role="alert">
             <p>
-              <strong>{state.status === 'initializing' ? 'Reconectando o microfone…' : 'O microfone parou de responder.'}</strong>
+              <strong>{state.status === 'initializing' ? 'Preparando o áudio…' : 'O áudio parou de responder.'}</strong>
               {state.error && <span> {state.error}</span>}
             </p>
             {state.status === 'error' && (
-              <button className="btn btn--sm" onClick={() => engine.init().catch(() => {})}>Reconectar</button>
+              <button className="btn btn--sm" onClick={() => engine.init().catch(() => {})}>Tentar de novo</button>
             )}
           </div>
         )}
