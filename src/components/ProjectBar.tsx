@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { audioBufferToWav } from '../audio/wav'
+import { download } from '../storage/share'
 import { useEngine, useEngineState } from '../hooks/useEngine'
 import { deleteProject, listProjects, loadProject, saveProject } from '../storage/projects'
 import s from './ProjectBar.module.css'
@@ -11,15 +12,6 @@ const MIME = ['video/mp4;codecs=avc1,mp4a.40.2', 'video/mp4', 'video/webm;codecs
 const when = new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short' })
 const clock = (sec: number) => `${String(Math.floor(sec / 60)).padStart(2, '0')}:${String(sec % 60).padStart(2, '0')}`
 const msg = (e: unknown) => (e instanceof Error ? e.message : String(e))
-
-function download(blob: Blob, filename: string) {
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = filename
-  a.click()
-  setTimeout(() => URL.revokeObjectURL(url), 10_000)
-}
 
 export function ProjectBar() {
   const engine = useEngine()

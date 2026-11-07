@@ -1,0 +1,111 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { transcribe } from './transcribe'
+import type { Note } from './transcribe'
+import { renderNotes } from './synth'
+import { loopDuration, stepDuration } from './timing'
+import { stepsToNotes, voiceToInstrument } from './transform'
+
+vi.mock('./transcribe', () => ({ transcribe: vi.fn() }))
+vi.mock('./synth', () => ({ renderNotes: vi.fn() }))
+
+beforeEach(() => vi.resetAllMocks())
+
+describe('stepsToNotes com timing real', () => {
+  it.each([60, 100, 180])('converte passos e duracoes em segundos a %i BPM sem mutar notas', bpm => {
+    const notes: Note[] = [{ step: 0, length: 1, midi: 60 }, { step: 7, length: 3, midi: 67 }]
+    const original = structuredClone(notes)
+    const converted = stepsToNotes(notes, bpm)
+    expect(converted).toEqual([
+      { time: 0, duration: stepDuration(bpm), midi: 60 },
+      { time: 7 * stepDuration(bpm), duration: 3 * stepDuration(bpm), midi: 67 },
+    ])
+    expect(converted[1].time).toBeCloseTo(7 * 15 / bpm)
+    expect(converted[1].duration).toBeCloseTo(3 * 15 / bpm)
+    expect(notes).toEqual(original)
+    expect(converted[0]).not.toBe(notes[0])
+    expect(transcribe).not.toHaveBeenCalled()
+    expect(renderNotes).not.toHaveBeenCalled()
+  })
+
+  it('retorna vazio para nenhuma nota', () => {
+    expect(stepsToNotes([], 120)).toEqual([])
+  })
+})
+
+function rendered(channel: Float32Array) {
+  const getChannelData = vi.fn(() => channel)
+  vi.mocked(renderNotes).mockResolvedValue({ getChannelData } as unknown as AudioBuffer)
+  return getChannelData
+}
+
+describe('voiceToInstrument', () => {
+  it('repassa entrada e tom para transcribe e nao renderiza quando nao ha notas', async () => {
+    const samples = Float32Array.from([0, 0, 0])
+    vi.mocked(transcribe).mockResolvedValue([])
+    expect(await voiceToInstrument(samples, 48000, 100, 2, 'F#')).toEqual({ notes: [], audio: null })
+    expect(transcribe).toHaveBeenCalledExactlyOnceWith(samples, 48000, 100, 2, 'F#')
+    expect(renderNotes).not.toHaveBeenCalled()
+  })
+
+  it.each([1, 2, 4] as const)('renderiza %i compasso(s) e extrai somente o canal zero', async bars => {
+    const samples = Float32Array.from([0.25, -0.25])
+    const notes: Note[] = [{ step: 2, length: 4, midi: 62 }, { step: 10, length: 2, midi: 69 }]
+    vi.mocked(transcribe).mockResolvedValue(notes)
+    const length = Math.round(loopDuration(100, bars) * 48000)
+    const channel = new Float32Array(length)
+    channel[0] = 0.5
+    channel[length - 1] = -0.5
+    const getChannelData = rendered(channel)
+    const result = await voiceToInstrument(samples, 48000, 100, bars, 'D')
+    expect(transcribe).toHaveBeenCalledExactlyOnceWith(samples, 48000, 100, bars, 'D')
+    expect(renderNotes).toHaveBeenCalledExactlyOnceWith([
+      { time: 0.3, duration: 0.6, midi: 62 },
+      { time: 1.5, duration: 0.3, midi: 69 },
+    ], loopDuration(100, bars), 48000)
+    expect(getChannelData).toHaveBeenCalledExactlyOnceWith(0)
+    expect(result.notes).toEqual(notes)
+    expect(result.audio).toBeInstanceOf(Float32Array)
+    expect(result.audio).toHaveLength(length)
+    expect(result.audio![0]).toBe(0.5)
+    expect(result.audio![length - 1]).toBe(-0.5)
+    expect(samples).toEqual(Float32Array.from([0.25, -0.25]))
+  })
+
+  it('recorta o frame excedente do renderer no comprimento arredondado do loop', async () => {
+    const bpm = 137, sampleRate = 44100
+    const exact = loopDuration(bpm, 1) * sampleRate
+    const length = Math.round(exact)
+    expect(Math.ceil(exact)).toBeGreaterThan(length)
+    const channel = new Float32Array(Math.ceil(exact)).fill(0.25)
+    channel[length] = 1
+    vi.mocked(transcribe).mockResolvedValue([{ step: 0, length: 1, midi: 60 }])
+    rendered(channel)
+    const { audio } = await voiceToInstrument(new Float32Array(1), sampleRate, bpm, 1, 'C')
+    expect(audio).toHaveLength(length)
+    expect(audio![length - 1]).toBe(0.25)
+  })
+
+  it('completa com silencio se o renderer fornecer um canal curto', async () => {
+    vi.mocked(transcribe).mockResolvedValue([{ step: 0, length: 1, midi: 60 }])
+    rendered(Float32Array.from([0.5]))
+    const { audio } = await voiceToInstrument(new Float32Array(1), 48000, 120, 1, 'C')
+    expect(audio).toHaveLength(96000)
+    expect(audio![0]).toBe(0.5)
+    expect(audio![1]).toBe(0)
+    expect(audio![95999]).toBe(0)
+  })
+
+  it('propaga erros de transcricao sem renderizar', async () => {
+    const error = new Error('Transcricao falhou')
+    vi.mocked(transcribe).mockRejectedValue(error)
+    await expect(voiceToInstrument(new Float32Array(1), 48000, 120, 1, 'C')).rejects.toBe(error)
+    expect(renderNotes).not.toHaveBeenCalled()
+  })
+
+  it('propaga erros do renderer', async () => {
+    const error = new Error('Render falhou')
+    vi.mocked(transcribe).mockResolvedValue([{ step: 0, length: 1, midi: 60 }])
+    vi.mocked(renderNotes).mockRejectedValue(error)
+    await expect(voiceToInstrument(new Float32Array(1), 48000, 120, 1, 'C')).rejects.toBe(error)
+  })
+})
