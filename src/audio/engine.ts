@@ -1,5 +1,5 @@
-import type { CalibrationResult, DrumVoice, EngineState, LoopEngine, Position, ProjectData, TrackParams, TrackSource, TrackState } from './types'
-import { DRUM_VOICES, KEYS, NOTE_PADS, STEPS_PER_BAR } from './types'
+import type { CalibrationResult, DrumVoice, EngineState, Instrument, LoopEngine, Position, ProjectData, TrackParams, TrackSource, TrackState } from './types'
+import { DRUM_VOICES, INSTRUMENTS, INSTRUMENT_OCTAVE, isInstrument, KEYS, NOTE_PADS, STEPS_PER_BAR } from './types'
 import {
   beatDuration,
   calibrationPlan,
@@ -35,6 +35,13 @@ import workletUrl from './recorder.worklet.ts?worker&url'
 interface TakeSnapshot {
   buffer: AudioBuffer | null
   source: TrackSource
+}
+
+interface LiveVoice {
+  voice: Voice
+  degree: number
+  midi: number
+  forced: boolean
 }
 
 interface Rec {
@@ -179,8 +186,15 @@ const pickParams = ({ name, volume, muted, solo, pan, filter, delay, reverb, nud
   name, volume, muted, solo, pan, filter, delay, reverb, nudge, overdubbing, source,
 })
 
+const validSource = (source: unknown): source is TrackSource =>
+  source === 'mic' || INSTRUMENTS.includes(source as Instrument)
+const REVERB_DEFAULT: Record<Instrument, number> = { ocarina: 0.2, flute: 0.2, kalimba: 0.15, bass: 0 }
+const sourceReverb = (source: TrackSource, reverb: number) =>
+  isInstrument(source) && reverb === 0 ? REVERB_DEFAULT[source] : reverb
+
 function mergeParams(cur: TrackState, p: Partial<TrackParams>, defaultName: string): TrackState {
   const mic = cur.kind === 'mic'
+  const source = mic && validSource(p.source) ? p.source : cur.source
   const name = typeof p.name === 'string' ? p.name.trim().slice(0, 24) || defaultName : cur.name
   return {
     ...cur,
@@ -194,7 +208,7 @@ function mergeParams(cur: TrackState, p: Partial<TrackParams>, defaultName: stri
     reverb: clamp(p.reverb, 0, 1, cur.reverb),
     nudge: mic ? clamp(p.nudge, -100, 100, cur.nudge) : 0,
     overdubbing: mic && p.overdubbing !== undefined ? !!p.overdubbing : cur.overdubbing,
-    source: mic && (p.source === 'mic' || p.source === 'ocarina') ? p.source : cur.source,
+    source,
   }
 }
 
@@ -229,7 +243,8 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
   const sources: (AudioBufferSourceNode | null)[] = Array(N).fill(null)
   const retiring = Array.from({ length: N }, () => new Set<AudioBufferSourceNode>()) // trocados, ainda soando
   const recs: (Rec | null)[] = Array(N).fill(null)
-  const live = Array.from({ length: N }, () => new Map<number, Voice & { midi: number }>())
+  const heldVoices = Array.from({ length: N }, () => new Map<number, LiveVoice>())
+  const sounding = Array.from({ length: N }, () => new Set<LiveVoice>())
   const peaks: ({ count: number; data: Float32Array } | null)[] = Array(N).fill(null)
   const clicks = new Set<OscillatorNode>()
   const levels = new Float32Array(N + 1)
@@ -414,7 +429,7 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
       })
     }
     recs.forEach((r, i) => {
-      if (r?.source === 'ocarina') updateInstrument(i)
+      if (r && isInstrument(r.source)) updateInstrument(i)
       else if (r && now >= r.start && state.tracks[i].status === 'armed') patchTrack(i, { status: 'recording' })
     })
   }
@@ -477,26 +492,39 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
     r.held.delete(degree)
   }
 
-  function stopNote(i: number, degree: number, forced = false) {
-    const voice = live[i].get(degree)
-    if (!voice) return
-    if (forced) voice.stop(ctx!.currentTime, 0.06)
-    else voice.stop(ctx!.currentTime)
-    live[i].delete(degree)
-    closeNote(i, degree)
+  function releaseHeld(i: number, entry: LiveVoice) {
+    if (heldVoices[i].get(entry.degree) !== entry) return
+    heldVoices[i].delete(entry.degree)
+    closeNote(i, entry.degree)
+  }
+
+  function cutVoice(i: number, entry: LiveVoice) {
+    if (!entry.forced) {
+      entry.forced = true
+      entry.voice.stop(ctx!.currentTime, 0.06)
+    }
+    releaseHeld(i, entry)
+  }
+
+  function stopNote(i: number, degree: number) {
+    const entry = heldVoices[i].get(degree)
+    if (!entry) return
+    entry.voice.stop(ctx!.currentTime)
+    releaseHeld(i, entry)
   }
 
   function stopLive(i: number) {
-    for (const degree of live[i].keys()) stopNote(i, degree, true)
+    for (const entry of sounding[i]) cutVoice(i, entry)
   }
 
   function updateInstrument(i: number) {
     const r = recs[i]
-    if (!r || r.source !== 'ocarina' || r.rendering || !ctx) return
+    if (!r || !isInstrument(r.source) || r.rendering || !ctx) return
     const now = heardTime(ctx.currentTime, outLatency())
     if (now < r.start) return
     if (state.tracks[i].status === 'armed') {
-      for (const [degree, voice] of live[i]) {
+      for (const [degree, voice] of heldVoices[i]) {
+        if (!sounding[i].has(voice) || voice.forced) continue
         const note: Note = { time: 0, duration: 0, midi: voice.midi }
         r.notes.push(note)
         r.held.set(degree, note)
@@ -508,7 +536,7 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
     r.rendering = true
     stopLive(i)
     if (!r.notes.length) return finish(i, r)
-    void renderNotes(r.notes, state.loopDuration, ctx.sampleRate).then((buffer) => {
+    void renderNotes(r.notes, state.loopDuration, ctx.sampleRate, r.source).then((buffer) => {
       if (recs[i] !== r || !ready()) return
       r.data = buffer.getChannelData(0).slice()
       finish(i, r)
@@ -520,17 +548,29 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
   }
 
   function noteOn(i: number, degree: number) {
-    if (!valid(i) || i === D || state.tracks[i].source !== 'ocarina' || busy() ||
+    if (!valid(i) || i === D || busy() ||
       !Number.isInteger(degree) || degree < 0 || degree >= NOTE_PADS) return
+    const source = state.tracks[i].source
+    if (!isInstrument(source)) return
     void resume()
     updateInstrument(i)
-    stopNote(i, degree, true)
-    if (live[i].size >= 4) stopNote(i, live[i].keys().next().value!, true)
-    const midi = pentatonic(state.key, NOTE_PADS, 4)[degree]
-    live[i].set(degree, { ...startVoice(ctx!, mix!.ch[i].input, midi, ctx!.currentTime), midi })
+    const previous = heldVoices[i].get(degree)
+    if (previous) cutVoice(i, previous)
+    const active = [...sounding[i]].filter(voice => !voice.forced)
+    if (active.length >= 4) cutVoice(i, active[0])
+    const midi = pentatonic(state.key, NOTE_PADS, INSTRUMENT_OCTAVE[source])[degree]
+    const entry: LiveVoice = {
+      voice: startVoice(ctx!, mix!.ch[i].input, midi, ctx!.currentTime, source), degree, midi, forced: false,
+    }
+    heldVoices[i].set(degree, entry)
+    sounding[i].add(entry)
+    entry.voice.onEnded(() => {
+      sounding[i].delete(entry)
+      releaseHeld(i, entry)
+    })
     const r = recs[i]
     const heard = heardTime(ctx!.currentTime, outLatency())
-    if (r?.source === 'ocarina' && !r.rendering && heard >= r.start && heard < r.start + state.loopDuration) {
+    if (r && isInstrument(r.source) && !r.rendering && heard >= r.start && heard < r.start + state.loopDuration) {
       const note: Note = { time: (heard - r.start) % state.loopDuration, duration: 0, midi }
       r.notes.push(note)
       r.held.set(degree, note)
@@ -1003,7 +1043,11 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
       if (state.status === 'disposed') return
       teardown()
       removedTrack = null
-      for (let i = 0; i < N; i++) dropTrack(i)
+      for (let i = 0; i < N; i++) {
+        heldVoices[i].clear()
+        sounding[i].clear()
+        dropTrack(i)
+      }
       set({ status: 'disposed', canRestoreTrack: false, tracks: state.tracks.map((t) => ({ ...t, status: 'empty' as const })) })
       listeners.clear()
     },
@@ -1080,7 +1124,8 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
     setTrack(i, params) {
       if (!valid(i)) return
       const prev = state.tracks[i]
-      const next = mergeParams(prev, params, defaultName(i))
+      const merged = mergeParams(prev, params, defaultName(i))
+      const next = { ...merged, reverb: merged.source !== prev.source ? sourceReverb(merged.source, merged.reverb) : merged.reverb }
       if (next.source !== prev.source) {
         stopLive(i)
         if (recs[i]) cancelRec(i)
@@ -1146,14 +1191,14 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
           data[j] = a + ((samples[k + 1] ?? a) - a) * (x - k)
         }
       }
-      const source = opts.source === 'mic' || opts.source === 'ocarina' ? opts.source : state.tracks[i].source
+      const source = validSource(opts.source) ? opts.source : state.tracks[i].source
       undoTake[i] = takeSnapshot(i)
       if (source !== state.tracks[i].source) stopLive(i)
       if (state.micTrack === i) set({ micTrack: null })
       buffers[i] = buffer
       peaks[i] = null
       if (state.playing) startSource(i, c.currentTime + 0.02)
-      patchTrack(i, { source, reverb: source === 'ocarina' && state.tracks[i].reverb === 0 ? 0.2 : state.tracks[i].reverb, status: 'recorded', canUndo: true, silentTake: false, revision: rev(i) })
+      patchTrack(i, { source, reverb: sourceReverb(source, state.tracks[i].reverb), status: 'recorded', canUndo: true, silentTake: false, revision: rev(i) })
     },
 
     getArmedIn(i) {

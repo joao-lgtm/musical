@@ -52,22 +52,24 @@ function tone(ctx: BaseAudioContext, dest: AudioNode, when: number, from: number
   fire(osc, [g], when, decay + 0.01)
 }
 
-export function playDrum(ctx: BaseAudioContext, dest: AudioNode, voice: DrumVoice, when: number): void {
+export function playDrum(ctx: BaseAudioContext, dest: AudioNode, voice: DrumVoice, when: number, velocity = 1): void {
+  velocity = Number.isFinite(velocity) ? Math.max(0, Math.min(1, velocity)) : 0
+  if (velocity === 0) return
   switch (voice) {
     case 'kick':
-      tone(ctx, dest, when, 150, 45, 0.08, 1, 0.45)
+      tone(ctx, dest, when, 150, 45, 0.08, velocity, 0.45)
       break
     case 'snare':
-      noise(ctx, dest, when, 'highpass', 1000, 0.7, 0.7, 0.18)
-      tone(ctx, dest, when, 180, 160, 0.05, 0.5, 0.1)
+      noise(ctx, dest, when, 'highpass', 1000, 0.7, 0.7 * velocity, 0.18)
+      tone(ctx, dest, when, 180, 160, 0.05, 0.5 * velocity, 0.1)
       break
     case 'hat':
-      noise(ctx, dest, when, 'highpass', 7000, 0.7, 0.4, 0.05)
+      noise(ctx, dest, when, 'highpass', 7000, 0.7, 0.4 * velocity, 0.05)
       break
     case 'clap':
       // 3 rajadas espaçadas ~10 ms + cauda
-      for (let i = 0; i < 3; i++) noise(ctx, dest, when + i * 0.01, 'bandpass', 1500, 1.5, 0.8, 0.02)
-      noise(ctx, dest, when + 0.03, 'bandpass', 1500, 1.5, 0.6, 0.2)
+      for (let i = 0; i < 3; i++) noise(ctx, dest, when + i * 0.01, 'bandpass', 1500, 1.5, 0.8 * velocity, 0.02)
+      noise(ctx, dest, when + 0.03, 'bandpass', 1500, 1.5, 0.6 * velocity, 0.2)
       break
   }
 }

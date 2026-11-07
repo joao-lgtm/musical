@@ -13,7 +13,16 @@ export type TrackStatus = 'empty' | 'armed' | 'recording' | 'recorded'
 export type TrackKind = 'mic' | 'drums'
 
 /** De onde vem o som de um canal 'mic': microfone ou instrumento sintetizado tocado pelos pads (grava pelo mesmo fluxo de take). */
-export type TrackSource = 'mic' | 'ocarina'
+export type TrackSource = 'mic' | Instrument
+
+/** Instrumentos sintetizados (synth.ts), tocados pelos pads ou gerados por "Transformar". */
+export type Instrument = 'ocarina' | 'flute' | 'kalimba' | 'bass'
+export const INSTRUMENTS: readonly Instrument[] = ['ocarina', 'flute', 'kalimba', 'bass']
+export const isInstrument = (source: TrackSource): source is Instrument => source !== 'mic'
+/** Oitava da tônica no pad 0 de cada instrumento (C4 = 60). */
+export const INSTRUMENT_OCTAVE: Readonly<Record<Instrument, number>> = { ocarina: 4, flute: 5, kalimba: 4, bass: 2 }
+/** Nome exibido. */
+export const INSTRUMENT_LABEL: Readonly<Record<Instrument, string>> = { ocarina: 'Ocarina', flute: 'Flauta', kalimba: 'Kalimba', bass: 'Baixo' }
 
 /** Tom do projeto; os instrumentos usam a pentatônica maior desse tom (ver scale.ts). */
 export type Key = 'C' | 'C#' | 'D' | 'D#' | 'E' | 'F' | 'F#' | 'G' | 'G#' | 'A' | 'A#' | 'B'
@@ -175,7 +184,7 @@ export interface LoopEngine {
   /** Muda o tom (afeta pads e takes futuros; takes já gravados não mudam). */
   setKey(key: Key): void
   /**
-   * Toca/solta uma nota do instrumento do canal (grau 0..NOTE_PADS-1 da pentatônica de state.key, a partir da 4ª oitava).
+   * Toca/solta uma nota do instrumento do canal (grau 0..NOTE_PADS-1 da pentatônica de state.key, a partir de INSTRUMENT_OCTAVE[source]).
    * Ignorado se o canal não tiver source de instrumento. Soa ao vivo e, se o canal estiver 'recording', entra no take.
    * Polifônico até 4 vozes por canal (a mais antiga é cortada com rampa). noteOff sem noteOn é ignorado.
    */

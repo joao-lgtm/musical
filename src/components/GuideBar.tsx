@@ -1,3 +1,6 @@
+import { takeStyleAnnouncement } from './stylePresets'
+import type { StylePreset } from './stylePresets'
+import { INSTRUMENT_LABEL, isInstrument } from '../audio/types'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { useEngine, useEngineState } from '../hooks/useEngine'
@@ -6,6 +9,9 @@ import { DiceIcon } from './Icons'
 import { loopFilename, renderLoopWav, shareOrDownload } from '../storage/share'
 import type { LoopEngine } from '../audio/types'
 import type { EngineState } from '../audio/types'
+
+const coachStyles = new WeakMap<LoopEngine, string>()
+export const getCoachStyle = (engine: LoopEngine) => coachStyles.get(engine)
 
 const MIC_TIP_KEY = 'loopstudio.micTipShown'
 const micTipShown = () => {
@@ -25,6 +31,23 @@ const calOffered = () => {
 export function GuideBar({ state, onCalibrate }: { state: EngineState; onCalibrate: () => void }) {
   // a calibração é oferecida uma vez, logo após o 1º take
   const engine = useEngine()
+  const [styleTip, setStyleTip] = useState<StylePreset | null>(null)
+  useEffect(() => {
+    const receive = () => {
+      const style = takeStyleAnnouncement(engine)
+      if (!style) return
+      coachStyles.set(engine, style.name)
+      setStyleTip(style)
+    }
+    window.addEventListener('loopstudio:style', receive)
+    receive()
+    return () => window.removeEventListener('loopstudio:style', receive)
+  }, [engine])
+  useEffect(() => {
+    if (!styleTip) return
+    const timer = setTimeout(() => setStyleTip(null), 12000)
+    return () => clearTimeout(timer)
+  }, [styleTip])
   const guide = useRef<HTMLDivElement>(null)
   const pendingFocus = useRef({ wasInside: false, target: 0 })
   const lastPreset = useRef<string | undefined>(undefined)
@@ -89,7 +112,7 @@ export function GuideBar({ state, onCalibrate }: { state: EngineState; onCalibra
     msg = <>{exportCard.message || 'Ficou bom! Leve seu loop com você.'}</>
     label = exportCard.busy ? 'Preparando…' : exportCard.canShare ? 'Compartilhar' : 'Baixar o loop'
     action = () => { void exportCard.save() }
-  } else if (layers === 0 && mics[0]?.source === 'ocarina') {
+  } else if (layers === 0 && mics[0] && isInstrument(mics[0].source)) {
     msg = <>A batida está rolando. Aperte <kbd>1</kbd> e toque os pads (ou <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd> <kbd>F</kbd> <kbd>G</kbd> <kbd>H</kbd> <kbd>J</kbd> <kbd>K</kbd>) durante a gravação.</>
     touchMsg = <>A batida está rolando. Toque em Gravar na faixa 1 e toque os pads durante a gravação.</>
     label = 'Gravar faixa 1'
@@ -99,7 +122,7 @@ export function GuideBar({ state, onCalibrate }: { state: EngineState; onCalibra
     touchMsg = <>A batida está rolando. Toque em Gravar na faixa 1 e cante, bata palmas ou bata na mesa.</>
     label = 'Gravar faixa 1'
     action = () => engine.record(0)
-  } else if (layers === 1 && free && mics[free - 1]?.source === 'ocarina') {
+  } else if (layers === 1 && free && mics[free - 1] && isInstrument(mics[free - 1].source)) {
     msg = <>Boa! Aperte <kbd>{free}</kbd> e toque os pads (ou <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd> <kbd>F</kbd> <kbd>G</kbd> <kbd>H</kbd> <kbd>J</kbd> <kbd>K</kbd>) durante a gravação.</>
     touchMsg = <>Boa! Toque em Gravar e toque os pads durante a gravação para adicionar outra camada.</>
     label = `Gravar faixa ${free}`
@@ -141,7 +164,7 @@ export function GuideBar({ state, onCalibrate }: { state: EngineState; onCalibra
 
   const isolated = state.isolateRecording && active >= 0
   const suggestOcarina = layers === 0 || state.mic === 'denied' || state.mic === 'missing'
-  if (!msg && !suggestOcarina && !transformTip && !isolated) return null
+  if (!msg && !suggestOcarina && !transformTip && !isolated && !styleTip) return null
   const offerCal = mics.some((track) => track.status === 'recorded' && track.source === 'mic') && !micUnavailable && state.mic !== 'requesting' && !silentWarning && layers === 1 && recording < 0 && armed < 0 && !offered
   function calibrate() {
     setOffered(true)
@@ -163,9 +186,10 @@ export function GuideBar({ state, onCalibrate }: { state: EngineState; onCalibra
         {label}
       </button>}
       {showingExport && <button type="button" className="btn btn--ghost guide__dismiss" disabled={exportCard.busy} onClick={exportCard.dismiss}>Agora não</button>}
+      {styleTip && <p className="guide__secondary" role="status">Estilo {styleTip.name}: a faixa 1 já está como {INSTRUMENT_LABEL[styleTip.instrument]}. Toque os pads ou troque para Microfone.</p>}
       {isolated && <p className="guide__secondary">Gravando isolada: você ouve só esta faixa e o metrônomo.</p>}
       {transformTip && <p className="guide__secondary">Cantou uma melodia? Experimente Transformar → Em ocarina. Dica: cante uma nota de cada vez, tipo “du du du”.</p>}
-      {suggestOcarina && <p className="guide__secondary">Sem microfone? Troque a faixa para Ocarina e toque os pads.</p>}
+      {suggestOcarina && <p className="guide__secondary">Sem microfone? Escolha um instrumento na fonte da faixa e toque os pads.</p>}
       {showTip && mics[active]?.source === 'mic' && state.mic === 'ready' && active >= 0 && !silentWarning && (
         <InputTip />
       )}

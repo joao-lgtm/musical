@@ -12,7 +12,7 @@ const VOICES: Record<DrumVoice, { name: string; key: string }> = {
 }
 const FIELD = 'input, textarea, select, [contenteditable]:not([contenteditable="false"])'
 
-export function Sequencer() {
+export function Sequencer({ coachStep = null }: { coachStep?: number | null }) {
   const engine = useEngine()
   const state = useEngineState(engine)
   const ready = state.status === 'ready'
@@ -138,7 +138,7 @@ export function Sequencer() {
         ))}
       </div>
 
-      <div ref={root} className={s.bars}>
+      <div data-coach-grid ref={root} className={s.bars}>
         {Array.from({ length: bars }, (_, b) => (
           <div key={b} className={s.bar} role="group" aria-label={`Compasso ${b + 1}`}>
             <span className={s.barNum} aria-hidden="true">{b + 1}</span>
@@ -156,6 +156,7 @@ export function Sequencer() {
                             key={step}
                             type="button"
                             className={s.cell}
+                            data-coach-target={coachStep === v && (v === 0 ? step % 16 === 0 || step % 16 === 8 : v === 1 ? step % 16 === 4 || step % 16 === 12 : step % 2 === 0) || undefined}
                             data-step={step}
                             data-beat={k % 4 === 0 ? '' : undefined}
                             aria-pressed={on}

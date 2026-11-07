@@ -1,12 +1,13 @@
+import { isInstrument } from './audio/types'
 import { useEffect, useRef, useState } from 'react'
 import { Calibration } from './components/Calibration'
 import { CountIn } from './components/CountIn'
 import { GuideBar, SurpriseButton } from './components/GuideBar'
 import { Mixer } from './components/Mixer'
-import { lastOcarina, rememberOcarina } from './components/NotePads'
+import { lastInstrument, rememberInstrument } from './components/NotePads'
 import { Performance } from './components/Performance'
 import { ProjectBar } from './components/ProjectBar'
-import { Sequencer } from './components/Sequencer'
+import { Coach } from './components/Coach'
 import { Shortcuts } from './components/Shortcuts'
 import { StartScreen } from './components/StartScreen'
 import { Transport } from './components/Transport'
@@ -120,14 +121,14 @@ export default function App() {
       if (degree < 0 || e.repeat || held.has(e.code) || e.ctrlKey || e.metaKey || e.altKey ||
           focusIn(e.target, FIELD) || document.querySelector('dialog[open]')) return
       const tracks = engine.getState().tracks
-      const active = tracks.findIndex((t) => t.source === 'ocarina' && (t.status === 'armed' || t.status === 'recording'))
-      const last = lastOcarina(engine)
-      const track = active >= 0 ? active : last !== undefined && tracks[last]?.source === 'ocarina'
-        ? last : tracks.findIndex((t) => t.source === 'ocarina')
+      const active = tracks.findIndex((t) => isInstrument(t.source) && (t.status === 'armed' || t.status === 'recording'))
+      const last = lastInstrument(engine)
+      const track = active >= 0 ? active : last !== undefined && tracks[last] && isInstrument(tracks[last].source)
+        ? last : tracks.findIndex((t) => isInstrument(t.source))
       if (track < 0) return
       e.preventDefault()
       held.set(e.code, { track, degree })
-      rememberOcarina(engine, track)
+      rememberInstrument(engine, track)
       showHeld(track, degree, true)
       engine.noteOn(track, degree)
     }
@@ -234,7 +235,7 @@ export default function App() {
             onClick={() => { removalStatus.current?.focus(); engine.restoreTrack(); setRemovedNotice(false) }}>Desfazer</button>}
         </div>
         <Mixer state={state} studio={studio} />
-        <Sequencer />
+        <Coach />
 
         <details className="adv">
           <summary>Avançado</summary>
