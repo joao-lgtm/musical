@@ -28,7 +28,9 @@ const STATUS = { empty: 'Vazia', armed: 'Armada', recording: 'Gravando', recorde
 
 export function Channel({ index, track, transportPlaying, studio, hint, dimmed, collapsible }: Props) {
   const engine = useEngine()
-  const { mic, micTrack } = useEngineState(engine)
+  const engineState = useEngineState(engine)
+  const { mic, micTrack } = engineState
+  const anyRecording = engineState.tracks.some((t) => t.status === 'armed' || t.status === 'recording')
   const requesting = track.source === 'mic' && mic === 'requesting' && micTrack === index
   const unavailable = track.source === 'mic' && (mic === 'denied' || mic === 'missing')
   const micFailed = unavailable && micTrack === index
@@ -123,6 +125,10 @@ export function Channel({ index, track, transportPlaying, studio, hint, dimmed, 
       </button>
 
       <TransformMenu track={index} />
+      <button type="button" className="btn btn--ghost strip__remove" disabled={anyRecording}
+        onClick={() => window.dispatchEvent(new CustomEvent('loopstudio:remove-track', { detail: index }))}>
+        Remover faixa
+      </button>
       {blocked && <span id={`ch${n}-mic-unavailable`} className="sr-only">Microfone indisponível</span>}
       {micFailed && (
         <p id={`ch${n}-mic-error`} className="strip__mic-error" role="alert">

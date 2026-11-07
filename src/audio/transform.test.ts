@@ -27,6 +27,11 @@ describe('stepsToNotes com timing real', () => {
     expect(renderNotes).not.toHaveBeenCalled()
   })
 
+  it('preserva tempos fracionarios da voz', () => {
+    expect(stepsToNotes([{ step: 2.48, length: 3.5, midi: 66 }], 120)).toEqual([
+      { time: 0.31, duration: 0.4375, midi: 66 },
+    ])
+  })
   it('retorna vazio para nenhuma nota', () => {
     expect(stepsToNotes([], 120)).toEqual([])
   })
@@ -66,8 +71,8 @@ describe('voiceToInstrument', () => {
     expect(result.notes).toEqual(notes)
     expect(result.audio).toBeInstanceOf(Float32Array)
     expect(result.audio).toHaveLength(length)
-    expect(result.audio![0]).toBe(0.5)
-    expect(result.audio![length - 1]).toBe(-0.5)
+    expect(result.audio![0]).toBeCloseTo(0.708)
+    expect(result.audio![length - 1]).toBeCloseTo(-0.708)
     expect(samples).toEqual(Float32Array.from([0.25, -0.25]))
   })
 
@@ -82,7 +87,7 @@ describe('voiceToInstrument', () => {
     rendered(channel)
     const { audio } = await voiceToInstrument(new Float32Array(1), sampleRate, bpm, 1, 'C')
     expect(audio).toHaveLength(length)
-    expect(audio![length - 1]).toBe(0.25)
+    expect(audio![length - 1]).toBeCloseTo(0.708)
   })
 
   it('completa com silencio se o renderer fornecer um canal curto', async () => {
@@ -90,11 +95,26 @@ describe('voiceToInstrument', () => {
     rendered(Float32Array.from([0.5]))
     const { audio } = await voiceToInstrument(new Float32Array(1), 48000, 120, 1, 'C')
     expect(audio).toHaveLength(96000)
-    expect(audio![0]).toBe(0.5)
+    expect(audio![0]).toBeCloseTo(0.708)
     expect(audio![1]).toBe(0)
     expect(audio![95999]).toBe(0)
   })
 
+  it.each([0.01, 2])('normaliza pico %s para -3 dBFS sem alterar proporcoes nem o buffer original', async peak => {
+    vi.mocked(transcribe).mockResolvedValue([{ step: 0, length: 1, midi: 66 }])
+    const channel = Float32Array.from([peak, -peak / 2])
+    rendered(channel)
+    const { audio } = await voiceToInstrument(new Float32Array(1), 48000, 120, 1, 'C')
+    expect(audio![0]).toBeCloseTo(0.708)
+    expect(audio![1]).toBeCloseTo(-0.354)
+    expect(channel[0]).toBeCloseTo(peak)
+  })
+  it('mantem silencio sem dividir por zero', async () => {
+    vi.mocked(transcribe).mockResolvedValue([{ step: 0, length: 1, midi: 66 }])
+    rendered(new Float32Array(1))
+    const { audio } = await voiceToInstrument(new Float32Array(1), 48000, 120, 1, 'C')
+    expect(audio!.every(value => value === 0)).toBe(true)
+  })
   it('propaga erros de transcricao sem renderizar', async () => {
     const error = new Error('Transcricao falhou')
     vi.mocked(transcribe).mockRejectedValue(error)

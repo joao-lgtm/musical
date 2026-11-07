@@ -5,6 +5,7 @@ import type { Note as SynthNote } from './synth'
 import { loopDuration, stepDuration } from './timing'
 import type { Key } from './types'
 
+/** Preserva passos fracionarios da transcricao, sem nova quantizacao. */
 export function stepsToNotes(notes: TranscribedNote[], bpm: number): SynthNote[] {
   const step = stepDuration(bpm)
   return notes.map(note => ({ time: note.step * step, duration: note.length * step, midi: note.midi }))
@@ -19,5 +20,11 @@ export async function voiceToInstrument(
   const buffer = await renderNotes(stepsToNotes(notes, bpm), duration, sampleRate)
   const audio = new Float32Array(Math.round(duration * sampleRate))
   audio.set(buffer.getChannelData(0).subarray(0, audio.length))
+  let peak = 0
+  for (const value of audio) peak = Math.max(peak, Math.abs(value))
+  if (peak > 0) {
+    const gain = 0.708 / peak
+    for (let i = 0; i < audio.length; i++) audio[i] *= gain
+  }
   return { notes, audio }
 }

@@ -1,6 +1,7 @@
 import type { Key } from './types'
-import { hzToMidi, quantizeToScale } from './scale'
+import { hzToMidi } from './scale'
 
+/** step e length podem ser fracionarios; key permanece apenas por compatibilidade. */
 export interface Note { step: number; length: number; midi: number }
 
 function median(values: number[]): number {
@@ -9,7 +10,7 @@ function median(values: number[]): number {
 }
 
 export async function transcribe(
-  samples: Float32Array, sampleRate: number, bpm: number, bars: 1 | 2 | 4, key: Key,
+  samples: Float32Array, sampleRate: number, bpm: number, bars: 1 | 2 | 4, _key: Key,
 ): Promise<Note[]> {
   if (!Number.isFinite(sampleRate) || sampleRate < 2000 || !Number.isFinite(bpm) || bpm <= 0) return []
   const stepTime = 15 / bpm
@@ -84,37 +85,65 @@ export async function transcribe(
     }
     return median(nearby)
   })
-  const notes: Note[] = []
-  let start = -1
-  let values: number[] = []
-  let previousEnd = -1
-  function finish(end: number, attack: boolean) {
-    if (start < 0) return
-    const onset = start * hop / rate
-    const offset = Math.min(duration, end * hop / rate)
-    const step = Math.max(0, Math.round(onset / stepTime))
-    const endStep = Math.min(bars * 16, Math.round(offset / stepTime))
-    if (offset - onset >= stepTime - hop / rate && endStep > step && step < bars * 16) {
-      const midi = quantizeToScale(median(values), key)
-      const previous = notes.at(-1)
-      if (!attack && previous && previous.midi === midi && previousEnd === start && previous.step + previous.length === step) {
-        previous.length = endStep - previous.step
-      } else notes.push({ step, length: endStep - step, midi })
-    }
-    previousEnd = end
-    start = -1
-    values = []
-  }
-  let beganWithAttack = false
+  const segments: { start: number; end: number; attack: boolean }[] = []
+  const frameTime = hop / rate
+  const stableFrames = Math.ceil(0.04 / frameTime)
+  let start = -1, anchor = 0, beganWithAttack = false
   for (let i = 0; i <= smooth.length; i++) {
     const pitch = smooth[i] ?? null
-    const attack = i > 0 && energy[i] > 0.015 && energy[i] > energy[i - 1] * 1.8
-    const changed = pitch !== null && values.length > 0 && Math.abs(pitch - values[Math.floor(values.length / 2)]) >= 1
-    if (pitch === null || attack || changed) finish(i, beganWithAttack)
-    if (pitch !== null) {
-      if (start < 0) { start = i; beganWithAttack = attack }
-      values.push(pitch)
+    const attack = i > 0 && energy[i] > 0.015 && energy[i] > median(energy.slice(Math.max(0, i - 3), i)) * 1.8
+    let changed = false
+    if (start >= 0 && pitch !== null && i - start >= stableFrames && Math.abs(pitch - anchor) > 0.7) {
+      const next = smooth.slice(i, i + stableFrames)
+      if (next.length === stableFrames && next.every(value => value !== null)) {
+        const values = next as number[]
+        const direction = Math.sign(pitch - anchor)
+        changed = values.every(value => (value - anchor) * direction > 0.7) &&
+          Math.max(...values) - Math.min(...values) < 0.7
+      }
     }
+    if (start >= 0 && (pitch === null || attack || changed)) {
+      segments.push({ start, end: i, attack: beganWithAttack })
+      start = -1
+    }
+    if (pitch !== null && start < 0) {
+      start = i
+      beganWithAttack = attack
+      anchor = median(smooth.slice(i, i + stableFrames).filter((value): value is number => value !== null))
+    }
+  }
+  const pitched = segments.map(segment => {
+    const coreStart = segment.start + Math.ceil(0.04 / frameTime)
+    const coreEnd = segment.end - Math.ceil((segment.end - segment.start) * 0.2)
+    let core = pitches.slice(coreStart, coreEnd).filter((value): value is number => value !== null)
+    if (!core.length) core = pitches.slice(segment.start, segment.end).filter((value): value is number => value !== null)
+    // MIDI e logaritmico: a mediana em cents preserva vibrato e rejeita portamento nas bordas.
+    return { ...segment, midi: Math.round(median(core.map(value => value * 100)) / 100) }
+  })
+  // Corrige apenas ilhas curtas de oitava entre duas notas concordantes.
+  const corrected = pitched.map((note, i) => {
+    const before = pitched[i - 1], after = pitched[i + 1]
+    if (before && after && (note.end - note.start) * frameTime < 0.18 &&
+      Math.abs(before.midi - after.midi) <= 1 && Math.abs(Math.abs(note.midi - before.midi) - 12) <= 1) {
+      return { ...note, midi: note.midi + (note.midi > before.midi ? -12 : 12) }
+    }
+    return note
+  })
+  const notes: Note[] = []
+  let previousEnd = -1
+  for (const note of corrected) {
+    const onset = note.start * frameTime
+    const end = Math.min(duration, note.end * frameTime)
+    if (end - onset < stepTime / 2 - frameTime) continue
+    const nearest = Math.round(onset / stepTime)
+    const step = Math.abs(nearest * stepTime - onset) <= stepTime * 0.35 ? nearest : onset / stepTime
+    if (step >= bars * 16) continue
+    const length = Math.min(bars * 16 - step, Math.max(0.5, Math.round((end / stepTime - step) * 2) / 2))
+    const previous = notes.at(-1)
+    if (previous && previous.midi === note.midi && note.start - previousEnd <= 2 && energy.slice(previousEnd, note.start).every(value => value >= 0.008) && !note.attack) {
+      previous.length = step + length - previous.step
+    } else notes.push({ step, length, midi: note.midi })
+    previousEnd = note.end
   }
   return notes
 }

@@ -155,17 +155,19 @@ function buildMix(c: BaseAudioContext, count: number): Mix {
 }
 
 /** t = null: valores imediatos (offline); senão rampa curta a partir de t. */
-function applyMix(mix: Mix, s: EngineState, t: number | null, master = true) {
+function applyMix(mix: Mix, s: EngineState, t: number | null, master = true, monitor = false) {
   const set = (p: AudioParam, v: number) => {
     if (t === null) p.value = v
     else p.setTargetAtTime(v, t, 0.01)
   }
   const anySolo = s.tracks.some((x) => x.solo)
+  const isolating = monitor && s.isolateRecording && s.tracks.some((tr) => tr.kind === 'mic' && (tr.status === 'armed' || tr.status === 'recording'))
   s.tracks.forEach((tr, i) => {
     const c = mix.ch[i]
     set(c.input.frequency, filterFreq(tr.filter))
     set(c.pan.pan, tr.pan)
-    set(c.out.gain, tr.muted || (anySolo && !tr.solo) ? 0 : tr.volume)
+    const active = tr.kind === 'mic' && (tr.status === 'armed' || tr.status === 'recording')
+    set(c.out.gain, tr.muted || (anySolo && !tr.solo) || (isolating && !active) ? 0 : tr.volume)
     set(c.dSend.gain, tr.delay)
     set(c.rSend.gain, tr.reverb)
   })
@@ -240,6 +242,13 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
   // undo de 1 nível: take/source anteriores (buffer null = vazio; undefined = sem undo) e padrão anterior
   const undoTake: (TakeSnapshot | undefined)[] = Array(N).fill(undefined)
   const takeSnapshot = (i: number): TakeSnapshot => ({ buffer: buffers[i], source: state.tracks[i].source })
+  let removedTrack: {
+    index: number
+    track: TrackState
+    buffer: AudioBuffer | null
+    undo: TakeSnapshot | undefined
+    peaks: (typeof peaks)[number]
+  } | null = null
   let undoPattern: boolean[][] | null = null
   let lastToggle = 0
   let calib: Calib | null = null
@@ -262,6 +271,8 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
     loopDuration: loopDuration(100, 2),
     masterVolume: 0.9,
     key: 'C',
+    isolateRecording: false,
+    canRestoreTrack: false,
     tracks: Array.from({ length: N }, (_, i) => blank(i === D ? 'drums' : 'mic', defaultName(i))),
     pattern: emptyPattern(2),
   }
@@ -269,6 +280,7 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
 
   function set(patch: Partial<EngineState>) {
     state = { ...state, ...patch }
+    if (patch.tracks || patch.isolateRecording !== undefined) remix()
     listeners.forEach((fn) => fn(state))
   }
   function patchTrack(i: number, patch: Partial<TrackState>) {
@@ -298,7 +310,7 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
   function remix() {
     if (!ctx || !mix) return
     const now = ctx.currentTime
-    applyMix(mix, state, now, false)
+    applyMix(mix, state, now, false, true)
     if (now < fadeEnd) {
       const gain = mix.master.gain
       gain.cancelScheduledValues(now)
@@ -786,6 +798,11 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
       undoTake.fill(undefined)
       set({ tracks: state.tracks.map((t) => (t.kind === 'mic' ? { ...t, canUndo: false } : t)) })
     }
+    // a faixa removida também tem a duração antiga
+    if (removedTrack) {
+      removedTrack = null
+      set({ canRestoreTrack: false })
+    }
     const next = { ...state, ...patch }
     const loop = loopDuration(next.bpm, next.bars)
     if (patch.pattern) setPatternState(patch.pattern as boolean[][], { ...patch, loopDuration: loop })
@@ -879,6 +896,59 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
     })
   }
 
+  const recording = () => state.tracks.some((tr) => tr.status === 'armed' || tr.status === 'recording')
+  function shiftedTrack(track: TrackState, from: number, to: number): TrackState {
+    return {
+      ...track,
+      name: track.name === defaultName(from) ? defaultName(to) : track.name,
+      revision: Math.max(track.revision, state.tracks[to].revision) + 1,
+    }
+  }
+  function stopShifted(from: number) {
+    for (let j = from; j < n; j++) { stopLive(j); stopSource(j) }
+  }
+  function restartShifted(from: number) {
+    if (state.playing && ctx) for (let j = from; j < n; j++) startSource(j, ctx.currentTime + 0.02)
+  }
+  function removeTrack(i: number) {
+    if (!valid(i) || i === D || busy() || recording()) return
+    removedTrack = { index: i, track: state.tracks[i], buffer: buffers[i], undo: undoTake[i], peaks: peaks[i] }
+    stopShifted(i)
+    const tracks = state.tracks.slice()
+    for (let j = i; j < n - 1; j++) {
+      tracks[j] = shiftedTrack(state.tracks[j + 1], j + 1, j)
+      buffers[j] = buffers[j + 1]
+      undoTake[j] = undoTake[j + 1]
+      peaks[j] = peaks[j + 1]
+    }
+    tracks[n - 1] = { ...blank('mic', defaultName(n - 1)), revision: state.tracks[n - 1].revision + 1 }
+    buffers[n - 1] = null
+    undoTake[n - 1] = undefined
+    peaks[n - 1] = null
+    set({ tracks, micTrack: null, canRestoreTrack: true })
+    restartShifted(i)
+  }
+  function restoreTrack() {
+    if (!ready() || busy() || recording() || !removedTrack || buffers[n - 1] || state.tracks[n - 1].status !== 'empty') return
+    const saved = removedTrack
+    stopShifted(saved.index)
+    const tracks = state.tracks.slice()
+    for (let j = n - 1; j > saved.index; j--) {
+      tracks[j] = shiftedTrack(state.tracks[j - 1], j - 1, j)
+      buffers[j] = buffers[j - 1]
+      undoTake[j] = undoTake[j - 1]
+      peaks[j] = peaks[j - 1]
+    }
+    const i = saved.index
+    tracks[i] = shiftedTrack(saved.track, i, i)
+    buffers[i] = saved.buffer
+    undoTake[i] = saved.undo
+    peaks[i] = saved.peaks
+    removedTrack = null
+    set({ tracks, micTrack: null, canRestoreTrack: false })
+    restartShifted(i)
+  }
+
   function record(i: number) {
     if (!valid(i) || i === D || busy()) return
     if (state.tracks[i].source === 'mic' && state.mic !== 'ready') {
@@ -932,8 +1002,9 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
     dispose() {
       if (state.status === 'disposed') return
       teardown()
+      removedTrack = null
       for (let i = 0; i < N; i++) dropTrack(i)
-      set({ status: 'disposed', tracks: state.tracks.map((t) => ({ ...t, status: 'empty' as const })) })
+      set({ status: 'disposed', canRestoreTrack: false, tracks: state.tracks.map((t) => ({ ...t, status: 'empty' as const })) })
       listeners.clear()
     },
 
@@ -979,9 +1050,15 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
     record,
 
     clear,
+    removeTrack,
+    restoreTrack,
+    setIsolateRecording(on) {
+      if (ready() && on !== state.isolateRecording) set({ isolateRecording: on })
+    },
     clearAll() {
       if (!ready() || busy()) return
       stopAll()
+      removedTrack = null
       if (hasSteps(state.pattern)) savePattern(false)
       for (let i = 0; i < N; i++) {
         if (buffers[i]) undoTake[i] = takeSnapshot(i)
@@ -996,6 +1073,7 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
           canUndo: i === D ? undoPattern !== null : undoTake[i] !== undefined,
         })),
         pattern: emptyPattern(state.bars),
+        canRestoreTrack: false,
       })
     },
 
@@ -1075,7 +1153,7 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
       buffers[i] = buffer
       peaks[i] = null
       if (state.playing) startSource(i, c.currentTime + 0.02)
-      patchTrack(i, { source, status: 'recorded', canUndo: true, silentTake: false, revision: rev(i) })
+      patchTrack(i, { source, reverb: source === 'ocarina' && state.tracks[i].reverb === 0 ? 0.2 : state.tracks[i].reverb, status: 'recorded', canUndo: true, silentTake: false, revision: rev(i) })
     },
 
     getArmedIn(i) {
@@ -1179,6 +1257,7 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
     importProject(data) {
       if (!ready() || busy() || data?.version !== 1) return
       stopAll()
+      removedTrack = null
       undoTake.fill(undefined)
       undoPattern = null
       const bars = isBars(data.bars) ? data.bars : state.bars
@@ -1205,6 +1284,7 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
         loopDuration: loopDuration(bpm, bars),
         masterVolume: clamp(data.masterVolume, 0, 1, state.masterVolume),
         key: data.key && KEYS.includes(data.key) ? data.key : 'C',
+        canRestoreTrack: false,
         tracks,
         pattern,
       })

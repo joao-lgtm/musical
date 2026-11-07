@@ -376,7 +376,207 @@ describe('audio sem permissao de microfone', () => {
     expect(master.linearRampToValueAtTime).not.toHaveBeenCalled()
   })
 
+  describe('remover e restaurar faixas', () => {
+    it('desloca audio, params, nomes, undo e cache; restaura na posicao original', async () => {
+      engine.dispose()
+      engine = createEngine({ tracks: 3 })
+      await engine.init()
+      engine.applyTake(0, Float32Array.of(0.1))
+      engine.applyTake(0, Float32Array.of(0.2), { source: 'ocarina' })
+      engine.setTrack(0, { name: 'Flauta', pan: 0.4 })
+      engine.applyTake(1, Float32Array.of(0.3))
+      engine.applyTake(1, Float32Array.of(0.4), { source: 'ocarina' })
+      engine.setTrack(1, { volume: 0.6, delay: 0.3 })
+      engine.applyTake(2, Float32Array.of(0.5))
+      const previous = engine.getState().tracks.slice()
+      const cached = engine.getPeaks(1, 10)
+      engine.removeTrack(0)
+      expect(engine.getState().canRestoreTrack).toBe(true)
+      expect(engine.getTakeAudio(0)!.samples[0]).toBeCloseTo(0.4)
+      expect(engine.getState().tracks[0]).toMatchObject({ name: 'Faixa 1', source: 'ocarina', volume: 0.6, delay: 0.3, canUndo: true })
+      expect(engine.getState().tracks[1].name).toBe('Faixa 2')
+      expect(engine.getState().tracks[0].revision).toBeGreaterThan(previous[0].revision)
+      expect(engine.getState().tracks[1].revision).toBeGreaterThan(previous[1].revision)
+      expect(engine.getPeaks(0, 10)).toBe(cached)
+      expect(engine.getState().tracks[2]).toMatchObject({ name: 'Faixa 3', status: 'empty', source: 'mic', canUndo: false })
+      engine.restoreTrack()
+      expect(engine.getState().canRestoreTrack).toBe(false)
+      expect(engine.getState().tracks[0]).toMatchObject({ name: 'Flauta', source: 'ocarina', pan: 0.4 })
+      expect(engine.getState().tracks[1].name).toBe('Faixa 2')
+      expect(engine.getTakeAudio(0)!.samples[0]).toBeCloseTo(0.2)
+      expect(engine.getTakeAudio(1)!.samples[0]).toBeCloseTo(0.4)
+      engine.undo(0)
+      engine.undo(1)
+      expect(engine.getTakeAudio(0)!.samples[0]).toBeCloseTo(0.1)
+      expect(engine.getTakeAudio(1)!.samples[0]).toBeCloseTo(0.3)
+      expect(engine.getState().tracks[0].source).toBe('mic')
+      expect(engine.getState().tracks[1].source).toBe('mic')
+    })
+
+    it('nao restaura sobre ultimo slot ocupado e mantem a possibilidade de restaurar', async () => {
+      await engine.init()
+      engine.applyTake(0, Float32Array.of(0.2))
+      engine.removeTrack(0)
+      engine.applyTake(1, Float32Array.of(0.7))
+      const before = engine.getState()
+      engine.restoreTrack()
+      expect(engine.getState()).toBe(before)
+      expect(engine.getState().canRestoreTrack).toBe(true)
+      engine.clear(1)
+      engine.restoreTrack()
+      expect(engine.getTakeAudio(0)!.samples[0]).toBeCloseTo(0.2)
+    })
+
+    it('invalida restore quando BPM ou compassos mudam (take removido teria outra duracao)', async () => {
+      await engine.init()
+      engine.applyTake(0, Float32Array.of(0.2))
+      engine.removeTrack(0)
+      expect(engine.getState().canRestoreTrack).toBe(true)
+      expect(engine.setBpm(engine.getState().bpm + 10)).toBe(true)
+      expect(engine.getState().canRestoreTrack).toBe(false)
+      engine.restoreTrack()
+      expect(engine.getState().tracks[0].status).toBe('empty')
+    })
+
+    it.each(['clearAll', 'importProject', 'dispose'] as const)('invalida restore ao chamar %s', async (action) => {
+      await engine.init()
+      engine.removeTrack(0)
+      if (action === 'importProject') engine.importProject(engine.exportProject())
+      else engine[action]()
+      expect(engine.getState().canRestoreTrack).toBe(false)
+      const before = engine.getState()
+      engine.restoreTrack()
+      expect(engine.getState()).toBe(before)
+    })
+
+    it('bloqueia qualquer remocao e restore enquanto outra faixa esta armed ou recording', async () => {
+      await engine.init()
+      engine.removeTrack(0)
+      engine.setTrack(1, { source: 'ocarina' })
+      engine.record(1)
+      let before = engine.getState()
+      engine.removeTrack(0)
+      engine.restoreTrack()
+      engine.removeTrack(2)
+      expect(engine.getState()).toBe(before)
+      TestContext.instances[0].currentTime = 3
+      vi.advanceTimersByTime(25)
+      before = engine.getState()
+      engine.removeTrack(0)
+      engine.restoreTrack()
+      expect(engine.getState()).toBe(before)
+    })
+
+    it('ignora remocao e restore durante calibracao', async () => {
+      await engine.init()
+      engine.removeTrack(0)
+      getUserMedia.mockResolvedValue(micStream().stream)
+      const calibration = engine.calibrateLatency({ clicks: 2 })
+      await engine.ensureMic()
+      await Promise.resolve()
+      const before = engine.getState()
+      engine.removeTrack(0)
+      engine.restoreTrack()
+      expect(engine.getState()).toBe(before)
+      await vi.runAllTimersAsync()
+      expect(await calibration).toBeNull()
+    })
+
+    it('reinicia fontes deslocadas em fase e preserva a bateria', async () => {
+      await engine.init()
+      engine.applyTake(1, Float32Array.of(0.5))
+      engine.setPattern([[true]])
+      engine.play()
+      const ctx = TestContext.instances[0]
+      ctx.currentTime = 0.5
+      const drums = engine.getState().tracks[2]
+      const pattern = engine.getState().pattern
+      engine.removeTrack(0)
+      expect(ctx.bufferSources.at(-1)!.start.mock.calls[0][0]).toBeCloseTo(0.52)
+      expect(ctx.bufferSources.at(-1)!.start.mock.calls[0][1]).toBeCloseTo(0.47)
+      expect(engine.getState().playing).toBe(true)
+      expect(engine.getState().tracks[2]).toBe(drums)
+      expect(engine.getState().pattern).toBe(pattern)
+    })
+  })
+
+  describe('isolamento na monitoracao', () => {
+    it('silencia outros canais ao armar e restaura ao cancelar sem alterar mute/solo', async () => {
+      await engine.init()
+      engine.setTrack(0, { source: 'ocarina', volume: 0.6 })
+      engine.setTrack(1, { volume: 0.4 })
+      const params = engine.exportProject().tracks
+      const ctx = TestContext.instances[0]
+      const outs = [ctx.gains[2].gain, ctx.gains[5].gain, ctx.gains[8].gain]
+      expect(engine.getState().isolateRecording).toBe(false)
+      engine.setIsolateRecording(true)
+      engine.record(0)
+      expect(outs[0].setTargetAtTime).toHaveBeenLastCalledWith(0.6, 0, 0.01)
+      expect(outs[1].setTargetAtTime).toHaveBeenLastCalledWith(0, 0, 0.01)
+      expect(outs[2].setTargetAtTime).toHaveBeenLastCalledWith(0, 0, 0.01)
+      expect(engine.exportProject().tracks.map((t) => [t.muted, t.solo])).toEqual(params.map((t) => [t.muted, t.solo]))
+      engine.record(0)
+      expect(outs[1].setTargetAtTime).toHaveBeenLastCalledWith(0.4, 0, 0.01)
+      expect(outs[2].setTargetAtTime).toHaveBeenLastCalledWith(0.8, 0, 0.01)
+    })
+
+    it('atualiza a monitoracao ao ligar/desligar durante recording e restaura apos take vazio', async () => {
+      await engine.init()
+      engine.setTrack(0, { source: 'ocarina' })
+      engine.record(0)
+      const ctx = TestContext.instances[0]
+      const out = ctx.gains[5].gain
+      ctx.currentTime = 3
+      vi.advanceTimersByTime(25)
+      expect(engine.getState().tracks[0].status).toBe('recording')
+      engine.setIsolateRecording(true)
+      expect(out.setTargetAtTime).toHaveBeenLastCalledWith(0, 3, 0.01)
+      engine.setIsolateRecording(false)
+      expect(out.setTargetAtTime).toHaveBeenLastCalledWith(0.8, 3, 0.01)
+      engine.setIsolateRecording(true)
+      ctx.currentTime = 8
+      await vi.advanceTimersByTimeAsync(25)
+      expect(engine.getState().tracks[0].silentTake).toBe(true)
+      expect(out.setTargetAtTime).toHaveBeenLastCalledWith(0.8, 8, 0.01)
+    })
+
+    it('renderMix ignora isolamento e export nao inclui flag de monitoracao', async () => {
+      await engine.init()
+      class Offline extends TestContext {
+        channels: number
+        length: number
+        constructor(channels: number, length: number, rate: number) {
+          super()
+          this.channels = channels
+          this.length = length
+          this.sampleRate = rate
+        }
+        async startRendering() { return new TestBuffer({ numberOfChannels: this.channels, length: this.length, sampleRate: this.sampleRate }) }
+      }
+      vi.stubGlobal('OfflineAudioContext', Offline)
+      engine.setTrack(0, { source: 'ocarina' })
+      engine.setIsolateRecording(true)
+      engine.record(0)
+      await engine.renderMix(1)
+      const offline = TestContext.instances.at(-1)!
+      expect(offline.gains[5].gain.value).toBe(0.8)
+      expect(offline.gains[8].gain.value).toBe(0.8)
+      expect(engine.exportProject()).not.toHaveProperty('isolateRecording')
+    })
+  })
+
   describe('audio do take', () => {
+    it('aplica reverb 0.2 a ocarina seca e preserva reverb ja escolhido', async () => {
+      await engine.init()
+      engine.applyTake(0, Float32Array.of(0.2), { source: 'ocarina' })
+      expect(engine.getState().tracks[0].reverb).toBe(0.2)
+      engine.setTrack(0, { reverb: 0.6 })
+      engine.applyTake(0, Float32Array.of(0.3), { source: 'ocarina' })
+      expect(engine.getState().tracks[0].reverb).toBe(0.6)
+      engine.applyTake(1, Float32Array.of(0.2), { source: 'mic' })
+      expect(engine.getState().tracks[1].reverb).toBe(0)
+    })
+
     it('retorna copias independentes e o sampleRate original do buffer', async () => {
       await engine.init()
       const project = engine.exportProject()
@@ -511,6 +711,14 @@ describe('audio sem permissao de microfone', () => {
       ctx.currentTime = start + duration + 0.021
       await vi.advanceTimersByTimeAsync(25)
     }
+
+    it('removeTrack solta as vozes ao vivo', async () => {
+      await engine.init()
+      engine.setTrack(0, { source: 'ocarina' })
+      engine.noteOn(0, 0)
+      engine.removeTrack(0)
+      expect(voices.mock.results[0].value.stop).toHaveBeenCalledTimes(1)
+    })
 
     it('toca pela faixa, respeita o tom e solta somente a nota pedida', async () => {
       await engine.init()

@@ -15,6 +15,16 @@ export function Transport({ state, studio }: { state: EngineState; studio: boole
   const hasAudio = state.tracks.some((t) => t.status !== 'empty')
   const [confirming, setConfirming] = useState(false)
 
+  useEffect(() => {
+    if (state.status !== 'ready') return
+    try { engine.setIsolateRecording(localStorage.getItem('loopstudio.isolateRec') === '1') } catch { /* sem persistência */ }
+  }, [engine, state.status])
+  function isolate() {
+    const on = !state.isolateRecording
+    engine.setIsolateRecording(on)
+    try { localStorage.setItem('loopstudio.isolateRec', on ? '1' : '0') } catch { /* sem persistência */ }
+  }
+
   // confirmação em dois cliques para "apagar tudo"; expira sozinha
   useEffect(() => {
     if (!confirming) return
@@ -79,6 +89,10 @@ export function Transport({ state, studio }: { state: EngineState; studio: boole
       >
         <MetronomeIcon size={18} />
         Metrônomo
+      </button>
+
+      <button type="button" className="btn btn--toggle transport__isolate" aria-pressed={state.isolateRecording} onClick={isolate}>
+        Ouvir só a faixa ao gravar
       </button>
 
       <button className="btn btn--ghost btn--danger" onClick={clearAll} disabled={!hasAudio} data-confirm={confirming || undefined}>
