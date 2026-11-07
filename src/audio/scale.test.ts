@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { hzToMidi, midiToHz, pentatonic, quantizeToScale } from './scale'
+import { hzToMidi, major, midiToHz, padNotes, pentatonic, quantizeToScale } from './scale'
 import { KEYS } from './types'
 
 describe('scale', () => {
@@ -19,5 +19,17 @@ describe('scale', () => {
     expect(quantizeToScale(71.9, 'C')).toBe(72)
     expect(quantizeToScale(-1, 'C')).toBe(0)
     expect(quantizeToScale(60, 'B')).toBe(59)
+  })
+})
+
+describe('escala maior dos pads', () => {
+  it('Dó maior em 10 pads cobre Dó4 até Mi5, com Fá e Si', () => {
+    expect(major('C')).toEqual([60, 62, 64, 65, 67, 69, 71, 72, 74, 76])
+  })
+
+  it('padNotes respeita a escala e a oitava', () => {
+    expect(padNotes('C', 'pentatonic')).toEqual(pentatonic('C', 8, 4))
+    expect(padNotes('G', 'major', 2)[0]).toBe(43)
+    expect(padNotes('C', 'major')).toHaveLength(10)
   })
 })

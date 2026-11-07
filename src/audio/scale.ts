@@ -1,5 +1,5 @@
-import type { Key } from './types'
-import { KEYS } from './types'
+import type { Key, PadScale } from './types'
+import { KEYS, PAD_COUNT } from './types'
 
 const INTERVALS = [0, 2, 4, 7, 9]
 
@@ -7,6 +7,20 @@ export function pentatonic(key: Key, degrees = 8, baseOctave = 4): number[] {
   const root = 12 * (baseOctave + 1) + KEYS.indexOf(key)
   return Array.from({ length: Math.max(0, Math.floor(degrees)) }, (_, i) =>
     root + 12 * Math.floor(i / 5) + INTERVALS[i % 5])
+}
+
+const MAJOR = [0, 2, 4, 5, 7, 9, 11]
+
+/** Escala maior a partir da tônica: graus 0..degrees-1, subindo oitavas a cada 7 graus. */
+export function major(key: Key, degrees = 10, baseOctave = 4): number[] {
+  const root = 12 * (baseOctave + 1) + KEYS.indexOf(key)
+  return Array.from({ length: Math.max(0, Math.floor(degrees)) }, (_, i) =>
+    root + 12 * Math.floor(i / 7) + MAJOR[i % 7])
+}
+
+/** Notas MIDI dos pads para a escala escolhida (PAD_COUNT[scale] pads). */
+export function padNotes(key: Key, scale: PadScale, baseOctave = 4): number[] {
+  return scale === 'major' ? major(key, PAD_COUNT.major, baseOctave) : pentatonic(key, PAD_COUNT.pentatonic, baseOctave)
 }
 
 export function midiToHz(midi: number): number {

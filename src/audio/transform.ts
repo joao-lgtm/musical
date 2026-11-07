@@ -1,3 +1,4 @@
+import type { Accompaniment } from './harmony'
 import { transcribe } from './transcribe'
 import type { Note as TranscribedNote } from './transcribe'
 import { renderNotes } from './synth'
@@ -26,13 +27,33 @@ export async function voiceToInstrument(
   const notes = transcribed.map(note => ({ ...note, midi: note.midi + shift }))
   const duration = loopDuration(bpm, bars)
   const buffer = await renderNotes(stepsToNotes(notes, bpm), duration, sampleRate, instrument)
+  const audio = normalizedChannel(buffer, duration, sampleRate, 0.708)
+  return { notes, audio }
+}
+
+function normalizedChannel(buffer: AudioBuffer, duration: number, sampleRate: number, targetPeak: number): Float32Array {
   const audio = new Float32Array(Math.round(duration * sampleRate))
   audio.set(buffer.getChannelData(0).subarray(0, audio.length))
   let peak = 0
   for (const value of audio) peak = Math.max(peak, Math.abs(value))
   if (peak > 0) {
-    const gain = 0.708 / peak
+    const gain = targetPeak / peak
     for (let i = 0; i < audio.length; i++) audio[i] *= gain
   }
-  return { notes, audio }
+  return audio
+}
+
+export async function renderAccompaniment(
+  acc: Accompaniment, duration: number, sampleRate: number, opts: { chords: Instrument; bass?: Instrument },
+): Promise<{ chords: Float32Array; bass: Float32Array }> {
+  const render = async (notes: SynthNote[], instrument: Instrument, peak: number) => {
+    if (!notes.length) return new Float32Array(Math.round(duration * sampleRate))
+    const buffer = await renderNotes(notes, duration, sampleRate, instrument)
+    return normalizedChannel(buffer, duration, sampleRate, peak)
+  }
+  const [chords, bass] = await Promise.all([
+    render(acc.chordNotes, opts.chords, 10 ** (-9 / 20)),
+    render(acc.bassNotes, opts.bass ?? 'bass', 10 ** (-6 / 20)),
+  ])
+  return { chords, bass }
 }

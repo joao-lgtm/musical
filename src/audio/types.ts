@@ -27,8 +27,13 @@ export const INSTRUMENT_LABEL: Readonly<Record<Instrument, string>> = { ocarina:
 /** Tom do projeto; os instrumentos usam a pentatônica maior desse tom (ver scale.ts). */
 export type Key = 'C' | 'C#' | 'D' | 'D#' | 'E' | 'F' | 'F#' | 'G' | 'G#' | 'A' | 'A#' | 'B'
 export const KEYS: readonly Key[] = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
-/** Pads de nota por instrumento (graus 0..7 da pentatônica a partir da tônica). */
-export const NOTE_PADS = 8
+/** Escala dos pads: pentatônica (nunca soa errado) ou maior (toca qualquer melodia do tom). */
+export type PadScale = 'pentatonic' | 'major'
+export const PAD_SCALES: readonly PadScale[] = ['pentatonic', 'major']
+/** Quantidade de pads por escala: pentatônica 8 graus; maior 10 graus (tônica até a 3ª da oitava de cima). */
+export const PAD_COUNT: Readonly<Record<PadScale, number>> = { pentatonic: 8, major: 10 }
+/** Máximo de pads (para teclado/atalhos). */
+export const NOTE_PADS = 10
 
 export interface TrackState {
   readonly kind: TrackKind
@@ -100,6 +105,7 @@ export interface EngineState {
   readonly loopDuration: number // segundos
   readonly masterVolume: number // 0..1
   readonly key: Key // padrão 'C'
+  readonly scale: PadScale // padrão 'pentatonic'
   /** Enquanto um canal mic está armado/gravando, só ele (e metrônomo/contagem) soa na monitoração; os outros canais e a bateria ficam mudos. Não afeta renderMix/exportação. */
   readonly isolateRecording: boolean
   /** Há uma faixa removida que restoreTrack() pode recolocar (1 nível). */
@@ -130,6 +136,8 @@ export interface ProjectData {
   masterVolume: number
   /** Ausente em projetos antigos → 'C'. */
   key?: Key
+  /** Ausente em projetos antigos → 'pentatonic'. */
+  scale?: PadScale
   sampleRate: number
   /** `source` ausente em projetos antigos → 'mic'. */
   tracks: (Omit<TrackParams, 'source'> & { source?: TrackSource; audio: Float32Array | null })[]
@@ -183,8 +191,10 @@ export interface LoopEngine {
   /** skipNext: ao inserir via pad ao vivo, pula apenas a ocorrência quantizada ainda não processada pelo scheduler; as próximas voltas tocam normalmente. */
   /** Muda o tom (afeta pads e takes futuros; takes já gravados não mudam). */
   setKey(key: Key): void
+  /** Muda a escala dos pads (soltando as notas seguradas); takes já gravados não mudam. */
+  setScale(scale: PadScale): void
   /**
-   * Toca/solta uma nota do instrumento do canal (grau 0..NOTE_PADS-1 da pentatônica de state.key, a partir de INSTRUMENT_OCTAVE[source]).
+   * Toca/solta uma nota do instrumento do canal (grau 0..PAD_COUNT[state.scale]-1 de padNotes(state.key, state.scale, INSTRUMENT_OCTAVE[source])).
    * Ignorado se o canal não tiver source de instrumento. Soa ao vivo e, se o canal estiver 'recording', entra no take.
    * Polifônico até 4 vozes por canal (a mais antiga é cortada com rampa). noteOff sem noteOn é ignorado.
    */

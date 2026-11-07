@@ -744,3 +744,14 @@ input[type='range']::-moz-range-thumb { width: 16px; height: 24px; border: 0; bo
   .coach-area [data-coach-grid] [data-voice] > span { grid-column: 1 / -1; }
   .coach-area [data-coach-grid] [data-voice] > button:nth-child(6) { grid-column-start: auto; }
 }
+
+/* Escala completa dos pads */
+.instrument-pads { display: grid; gap: 8px; min-width: 0; }
+.pad-scale { display: grid; gap: 4px; min-width: 0; }
+.pad-scale select { width: 100%; min-width: 0; min-height: 44px; padding: 6px; border: 1px solid var(--line-2); border-radius: 6px; background: var(--panel-hi); color: var(--ink); font-size: 0.8125rem; }
+.note-pads { gap: 4px; }
+.note-pads[data-scale='major'] { grid-template-columns: repeat(2, minmax(44px, 1fr)); }
+.note-pad { min-height: 44px; }
+.note-pad__key { display: block; width: max-content; margin: 3px auto 0; font-size: 0.625rem; }
+@media (max-width: 720px) { .note-pads[data-scale='major'] { grid-template-columns: repeat(5, minmax(44px, 1fr)); } }
+@media (hover: none) { .note-pad__key { display: none; } }

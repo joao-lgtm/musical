@@ -1,9 +1,10 @@
+import type { Accompaniment } from './harmony'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { transcribe } from './transcribe'
 import type { Note } from './transcribe'
 import { renderNotes } from './synth'
 import { loopDuration, stepDuration } from './timing'
-import { stepsToNotes, voiceToInstrument } from './transform'
+import { renderAccompaniment, stepsToNotes, voiceToInstrument } from './transform'
 
 vi.mock('./transcribe', () => ({ transcribe: vi.fn() }))
 vi.mock('./synth', () => ({ renderNotes: vi.fn() }))
@@ -146,5 +147,73 @@ describe('voiceToInstrument', () => {
     vi.mocked(transcribe).mockResolvedValue([{ step: 0, length: 1, midi: 60 }])
     vi.mocked(renderNotes).mockRejectedValue(error)
     await expect(voiceToInstrument(new Float32Array(1), 48000, 120, 1, 'C')).rejects.toBe(error)
+  })
+})
+
+describe('renderAccompaniment', () => {
+  function accompaniment(): Accompaniment {
+    return {
+      key: 'C', chords: [],
+      chordNotes: [{ time: 0, duration: 1, midi: 60 }, { time: 0, duration: 1, midi: 64 }],
+      bassNotes: [{ time: 0, duration: 0.5, midi: 36 }],
+    }
+  }
+  function buffer(channel: Float32Array) {
+    return { getChannelData: vi.fn(() => channel) } as unknown as AudioBuffer
+  }
+  it('repassa instrumentos e normaliza acordes a -9dBFS e baixo a -6dBFS', async () => {
+    const acc = accompaniment(), original = structuredClone(acc)
+    const a = Float32Array.from([2, -1, 0]), b = Float32Array.from([0.1, -0.2])
+    vi.mocked(renderNotes).mockResolvedValueOnce(buffer(a)).mockResolvedValueOnce(buffer(b))
+    const result = await renderAccompaniment(acc, 1, 48000, { chords: 'kalimba' })
+    expect(renderNotes).toHaveBeenNthCalledWith(1, acc.chordNotes, 1, 48000, 'kalimba')
+    expect(renderNotes).toHaveBeenNthCalledWith(2, acc.bassNotes, 1, 48000, 'bass')
+    expect(result.chords).toHaveLength(48000)
+    expect(result.bass).toHaveLength(48000)
+    expect(result.chords[0]).toBeCloseTo(10 ** (-9 / 20), 6)
+    expect(result.chords[1]).toBeCloseTo(-(10 ** (-9 / 20)) / 2, 6)
+    expect(result.bass[1]).toBeCloseTo(-(10 ** (-6 / 20)), 6)
+    expect(result.bass[0]).toBeCloseTo(10 ** (-6 / 20) / 2, 6)
+    expect(result.chords[47999]).toBe(0)
+    expect(result.bass[47999]).toBe(0)
+    expect(a).toEqual(Float32Array.from([2, -1, 0]))
+    expect(b).toEqual(Float32Array.from([0.1, -0.2]))
+    expect(acc).toEqual(original)
+  })
+  it('permite escolher outro instrumento para o baixo e recorta antes de medir pico', async () => {
+    const duration = 1.234, sampleRate = 44100, size = Math.round(duration * sampleRate)
+    const chord = new Float32Array(size + 1).fill(0.2)
+    chord[size] = 10
+    vi.mocked(renderNotes).mockResolvedValueOnce(buffer(chord)).mockResolvedValueOnce(buffer(new Float32Array(size)))
+    const result = await renderAccompaniment(accompaniment(), duration, sampleRate, { chords: 'ocarina', bass: 'flute' })
+    expect(renderNotes).toHaveBeenNthCalledWith(2, accompaniment().bassNotes, duration, sampleRate, 'flute')
+    expect(result.chords).toHaveLength(size)
+    expect(result.bass).toHaveLength(size)
+    expect(result.chords[size - 1]).toBeCloseTo(10 ** (-9 / 20), 6)
+    expect(result.bass.every(value => value === 0)).toBe(true)
+  })
+  it('retorna dois buffers completos de silencio para listas vazias', async () => {
+    const acc = { ...accompaniment(), chordNotes: [], bassNotes: [] }
+    const result = await renderAccompaniment(acc, 2, 48000, { chords: 'kalimba' })
+    for (const audio of [result.chords, result.bass]) {
+      expect(audio).toHaveLength(96000)
+      expect(audio.every(value => value === 0)).toBe(true)
+    }
+    expect(result.chords).not.toBe(result.bass)
+    expect(renderNotes).not.toHaveBeenCalled()
+  })
+  it('aceita baixo sem notas junto de acordes renderizados', async () => {
+    const acc = { ...accompaniment(), bassNotes: [] }
+    vi.mocked(renderNotes).mockResolvedValue(buffer(Float32Array.from([1])))
+    const result = await renderAccompaniment(acc, 1, 48000, { chords: 'kalimba' })
+    expect(renderNotes).toHaveBeenCalledExactlyOnceWith(acc.chordNotes, 1, 48000, 'kalimba')
+    expect(result.chords[0]).toBeCloseTo(10 ** (-9 / 20), 6)
+    expect(result.bass).toHaveLength(48000)
+    expect(result.bass.every(value => value === 0)).toBe(true)
+  })
+  it('propaga falhas de renderizacao', async () => {
+    const error = new Error('Render falhou')
+    vi.mocked(renderNotes).mockRejectedValue(error)
+    await expect(renderAccompaniment(accompaniment(), 1, 48000, { chords: 'kalimba' })).rejects.toBe(error)
   })
 })

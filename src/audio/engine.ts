@@ -1,5 +1,5 @@
 import type { CalibrationResult, DrumVoice, EngineState, Instrument, LoopEngine, Position, ProjectData, TrackParams, TrackSource, TrackState } from './types'
-import { DRUM_VOICES, INSTRUMENTS, INSTRUMENT_OCTAVE, isInstrument, KEYS, NOTE_PADS, STEPS_PER_BAR } from './types'
+import { DRUM_VOICES, INSTRUMENTS, INSTRUMENT_OCTAVE, isInstrument, KEYS, PAD_COUNT, PAD_SCALES, STEPS_PER_BAR } from './types'
 import {
   beatDuration,
   calibrationPlan,
@@ -27,7 +27,7 @@ import {
 } from './timing'
 import { playDrum } from './drums'
 import { isSilent } from './silence'
-import { pentatonic } from './scale'
+import { padNotes } from './scale'
 import { renderNotes, startVoice, type Note, type Voice } from './synth'
 import { detectOnsets, estimateLatency } from './calibrate'
 import workletUrl from './recorder.worklet.ts?worker&url'
@@ -286,6 +286,7 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
     loopDuration: loopDuration(100, 2),
     masterVolume: 0.9,
     key: 'C',
+    scale: 'pentatonic',
     isolateRecording: false,
     canRestoreTrack: false,
     tracks: Array.from({ length: N }, (_, i) => blank(i === D ? 'drums' : 'mic', defaultName(i))),
@@ -549,7 +550,7 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
 
   function noteOn(i: number, degree: number) {
     if (!valid(i) || i === D || busy() ||
-      !Number.isInteger(degree) || degree < 0 || degree >= NOTE_PADS) return
+      !Number.isInteger(degree) || degree < 0 || degree >= PAD_COUNT[state.scale]) return
     const source = state.tracks[i].source
     if (!isInstrument(source)) return
     void resume()
@@ -558,7 +559,7 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
     if (previous) cutVoice(i, previous)
     const active = [...sounding[i]].filter(voice => !voice.forced)
     if (active.length >= 4) cutVoice(i, active[0])
-    const midi = pentatonic(state.key, NOTE_PADS, INSTRUMENT_OCTAVE[source])[degree]
+    const midi = padNotes(state.key, state.scale, INSTRUMENT_OCTAVE[source])[degree]
     const entry: LiveVoice = {
       voice: startVoice(ctx!, mix!.ch[i].input, midi, ctx!.currentTime, source), degree, midi, forced: false,
     }
@@ -1064,6 +1065,11 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
     setKey(key) {
       if (ready() && KEYS.includes(key) && key !== state.key) set({ key })
     },
+    setScale(scale) {
+      if (!ready() || !PAD_SCALES.includes(scale) || scale === state.scale) return
+      for (let i = 0; i < n; i++) stopLive(i)
+      set({ scale })
+    },
     noteOn,
     noteOff,
 
@@ -1289,6 +1295,7 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
         bars: state.bars,
         masterVolume: state.masterVolume,
         key: state.key,
+        scale: state.scale,
         sampleRate: sr,
         tracks: state.tracks.map((t, i) => {
           const b = buffers[i]
@@ -1329,6 +1336,7 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
         loopDuration: loopDuration(bpm, bars),
         masterVolume: clamp(data.masterVolume, 0, 1, state.masterVolume),
         key: data.key && KEYS.includes(data.key) ? data.key : 'C',
+        scale: data.scale && PAD_SCALES.includes(data.scale) ? data.scale : 'pentatonic',
         canRestoreTrack: false,
         tracks,
         pattern,
