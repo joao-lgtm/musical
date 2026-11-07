@@ -91,6 +91,10 @@ export interface EngineState {
   readonly loopDuration: number // segundos
   readonly masterVolume: number // 0..1
   readonly key: Key // padrão 'C'
+  /** Enquanto um canal mic está armado/gravando, só ele (e metrônomo/contagem) soa na monitoração; os outros canais e a bateria ficam mudos. Não afeta renderMix/exportação. */
+  readonly isolateRecording: boolean
+  /** Há uma faixa removida que restoreTrack() pode recolocar (1 nível). */
+  readonly canRestoreTrack: boolean
   /** 8 canais mic + 1 canal drums no fim (índice tracks.length - 1). */
   readonly tracks: readonly TrackState[]
   /** pattern[voz][passo], voz na ordem de DRUM_VOICES, bars * STEPS_PER_BAR passos. */
@@ -157,6 +161,14 @@ export interface LoopEngine {
   /** Canal mic: apaga o take. Canal drums: limpa o padrão. */
   clear(track: number): void
   clearAll(): void
+  /**
+   * Remove o canal mic da mesa: as faixas seguintes sobem uma posição (áudio, parâmetros, undo, source) e o último canal mic vira vazio padrão.
+   * Nomes padrão ('Faixa N') são renumerados; nomes editados são mantidos. Ignorado em canal armado/gravando, durante a calibração ou no drums.
+   */
+  removeTrack(track: number): void
+  /** Recoloca a última faixa removida na posição original (empurrando as seguintes). Ignorado se canRestoreTrack for false ou houver gravação em curso. */
+  restoreTrack(): void
+  setIsolateRecording(on: boolean): void
   /** Atualiza parâmetros do canal (merge parcial). Valores fora da faixa são limitados. */
   setTrack(track: number, params: Partial<TrackParams>): void
   /** skipNext: ao inserir via pad ao vivo, pula apenas a ocorrência quantizada ainda não processada pelo scheduler; as próximas voltas tocam normalmente. */

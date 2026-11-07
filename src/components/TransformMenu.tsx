@@ -14,7 +14,6 @@ export function TransformMenu({ track }: { track: number }) {
   const root = useRef<HTMLDivElement>(null)
   const generation = useRef(0)
   const processing = useRef(false)
-  const free = state.tracks.findIndex((t) => t.kind === 'mic' && t.status === 'empty')
   useEffect(() => {
     return () => { generation.current++ }
   }, [])
@@ -25,18 +24,16 @@ export function TransformMenu({ track }: { track: number }) {
     document.addEventListener('pointerdown', outside)
     return () => document.removeEventListener('pointerdown', outside)
   }, [open])
-  async function transform(kind: 'new' | 'replace' | 'drums') {
+  async function transform(kind: 'replace' | 'drums') {
     if (processing.current) return
     const take = engine.getTakeAudio(track)
     if (!take) { setMessage('Esse take não está mais disponível.'); setOpen(false); trigger.current?.focus(); return }
     const snapshot = engine.getState()
-    const target = kind === 'drums' ? snapshot.tracks.length - 1 : kind === 'new'
-      ? snapshot.tracks.findIndex((t) => t.kind === 'mic' && t.status === 'empty') : track
-    if (kind === 'new' && target < 0) return
+    const target = kind === 'drums' ? snapshot.tracks.length - 1 : track
     const operation = generation.current
     const sourceRevision = snapshot.tracks[track].revision
     const targetRevision = snapshot.tracks[target].revision
-    const expectedStatus = kind === 'new' ? 'empty' : kind === 'replace' ? 'recorded' : snapshot.tracks[target].status
+    const expectedStatus = kind === 'replace' ? 'recorded' : snapshot.tracks[target].status
     const isCurrent = () => generation.current === operation
     const canApply = () => {
       if (!isCurrent()) return false
@@ -75,7 +72,7 @@ export function TransformMenu({ track }: { track: number }) {
           engine.applyTake(target, result.audio, { sampleRate: take.sampleRate, source: 'ocarina' })
           const applied = engine.getState().tracks[target]
           if (isCurrent()) setMessage(applied?.revision > targetRevision && applied.source === 'ocarina'
-            ? `Pronto: faixa ${target + 1} agora é ocarina. Use desfazer para voltar.`
+            ? `Pronto: a faixa ${target + 1} virou ocarina. Use desfazer para ouvir sua voz de novo.`
             : 'Não deu para aplicar agora. Tente de novo.')
         }
       }
@@ -97,9 +94,8 @@ export function TransformMenu({ track }: { track: number }) {
     </button>}
     {open && <div ref={panel} id={`transform-${track}`} className="transform__panel" role="group" aria-label={`Transformar faixa ${track + 1}`}
       onKeyDown={(e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); setOpen(false); trigger.current?.focus() } }}>
-      <button type="button" disabled={free < 0} title={free < 0 ? 'Sem faixa livre' : undefined} onClick={() => { void transform('new') }}>Em ocarina (próxima faixa livre)</button>
-      <button type="button" onClick={() => { void transform('replace') }}>Em ocarina (substituir esta)</button>
-      <button type="button" onClick={() => { void transform('drums') }}>Em bateria (sequenciador)</button>
+      <button type="button" onClick={() => { void transform('replace') }}>Em ocarina</button>
+      <button type="button" onClick={() => { void transform('drums') }}>Em bateria</button>
     </div>}
     <p className="transform__status" role="status">{message}</p>
   </div>

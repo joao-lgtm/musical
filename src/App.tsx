@@ -39,6 +39,40 @@ export default function App() {
   const calRef = useRef<HTMLDialogElement>(null)
   const [calibrating, setCalibrating] = useState(false)
   const [perf, setPerf] = useState(false)
+  const [removedNotice, setRemovedNotice] = useState(false)
+  const removalStatus = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const remove = (event: Event) => {
+      const index = (event as CustomEvent<number>).detail
+      const before = engine.getState()
+      if (!Number.isInteger(index) || before.tracks[index]?.kind !== 'mic' ||
+          before.tracks.some((t) => t.status === 'armed' || t.status === 'recording')) return
+      removalStatus.current?.focus({ preventScroll: true })
+      engine.removeTrack(index)
+      if (engine.getState() !== before && engine.getState().canRestoreTrack) setRemovedNotice(true)
+    }
+    window.addEventListener('loopstudio:remove-track', remove)
+    return () => window.removeEventListener('loopstudio:remove-track', remove)
+  }, [engine])
+  useEffect(() => {
+    if (!removedNotice) return
+    const timer = setTimeout(() => {
+      // o Desfazer vai sumir: se o foco estava nele, fica no contêiner estável do aviso
+      const box = removalStatus.current
+      if (box && box !== document.activeElement && box.contains(document.activeElement)) box.focus({ preventScroll: true })
+      setRemovedNotice(false)
+    }, 8000)
+    const nextAction = (event: Event) => {
+      if (!removalStatus.current?.contains(event.target as Node)) setRemovedNotice(false)
+    }
+    document.addEventListener('pointerdown', nextAction, true)
+    document.addEventListener('keydown', nextAction, true)
+    return () => {
+      clearTimeout(timer)
+      document.removeEventListener('pointerdown', nextAction, true)
+      document.removeEventListener('keydown', nextAction, true)
+    }
+  }, [removedNotice])
 
   function enterPerf() {
     setPerf(true)
@@ -193,6 +227,11 @@ export default function App() {
         <div className="cue">
           <GuideBar state={state} onCalibrate={() => calRef.current?.showModal()} />
           <SurpriseButton />
+        </div>
+        <div ref={removalStatus} className="track-removal" tabIndex={-1} aria-label="Ações de faixa">
+          <span role="status">{removedNotice ? 'Faixa removida.' : ''}</span>
+          {removedNotice && <button type="button" className="btn btn--ghost" disabled={!state.canRestoreTrack || state.tracks.some((t) => t.status === 'armed' || t.status === 'recording')}
+            onClick={() => { removalStatus.current?.focus(); engine.restoreTrack(); setRemovedNotice(false) }}>Desfazer</button>}
         </div>
         <Mixer state={state} studio={studio} />
         <Sequencer />

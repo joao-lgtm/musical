@@ -700,3 +700,14 @@ input[type='range']::-moz-range-thumb { width: 16px; height: 24px; border: 0; bo
 .transform__panel button:disabled { opacity: 0.45; cursor: not-allowed; }
 .transform__status { font-size: 0.875rem; color: var(--ink); overflow-wrap: anywhere; }
 .transform__status:not(:empty) { margin-top: 8px; }
+
+/* Remoção e monitoração isolada */
+.strip__remove { min-height: 44px; white-space: normal; }
+.track-removal { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.track-removal:empty { display: none; }
+.track-removal:focus { outline: 2px solid var(--ch1-lit); outline-offset: 3px; }
+.transport__isolate { min-height: 44px; white-space: normal; }
+@media (max-width: 720px) {
+  .strip[data-collapsible] > .strip__remove { display: flex; }
+  .transport__isolate { grid-column: 1 / -1; }
+}

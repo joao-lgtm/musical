@@ -7,6 +7,7 @@ function state(): EngineState {
     status: 'ready', error: null, mic: 'off', micError: null, micTrack: null,
     bpm: 120, bars: 1, metronome: false, latencyOffset: 0, playing: false,
     loopDuration: 2, masterVolume: 1, key: 'C',
+    isolateRecording: false, canRestoreTrack: false,
     pattern: Array.from({ length: 4 }, () => Array<boolean>(16).fill(false)),
     tracks: [{
       kind: 'mic', name: 'Faixa 1', status: 'empty', volume: 1, muted: false,
@@ -32,6 +33,16 @@ describe('hasDraftContentChanged', () => {
       expect(hasDraftContentChanged(base, trackChange(base, {
         status, canUndo: true, silentTake: true,
       }))).toBe(false)
+    }
+  })
+
+  it('ignora isolamento de gravacao e disponibilidade de restauracao', () => {
+    const base = state()
+    for (const patch of [
+      { isolateRecording: true }, { canRestoreTrack: true },
+      { isolateRecording: true, canRestoreTrack: true },
+    ]) {
+      expect(hasDraftContentChanged(base, { ...base, ...patch })).toBe(false)
     }
   })
 
