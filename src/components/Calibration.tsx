@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import type { Ref } from 'react'
 import type { CalibrationResult } from '../audio/types'
-import { useEngine } from '../hooks/useEngine'
+import { useEngine, useEngineState } from '../hooks/useEngine'
 
 const CLICKS = 8
 type Phase = 'intro' | 'running' | 'ok' | 'fail'
@@ -9,11 +9,14 @@ type Phase = 'intro' | 'running' | 'ok' | 'fail'
 /** Assistente "bata palma no clique" num <dialog> nativo. onBusy trava atalhos enquanto mede. */
 export function Calibration({ ref, onBusy }: { ref: Ref<HTMLDialogElement>; onBusy: (busy: boolean) => void }) {
   const engine = useEngine()
+  const state = useEngineState(engine)
+  const activeTrack = state.tracks.slice(0, -1).findIndex((t) => t.status === 'armed' || t.status === 'recording')
   const [phase, setPhase] = useState<Phase>('intro')
   const [lit, setLit] = useState(0)
   const [result, setResult] = useState<CalibrationResult | null>(null)
 
   async function run() {
+    if (engine.getState().tracks.slice(0, -1).some((t) => t.status === 'armed' || t.status === 'recording')) return
     setPhase('running')
     setLit(0)
     onBusy(true)
@@ -46,6 +49,9 @@ export function Calibration({ ref, onBusy }: { ref: Ref<HTMLDialogElement>; onBu
             : 'Bata uma palma junto com cada clique. São 8 cliques, uns 5 segundos.'}
       </p>
 
+      <p role="status" className="keys__note">
+        {activeTrack >= 0 ? `Termine ou cancele a gravação da faixa ${activeTrack + 1} antes de calibrar.` : ''}
+      </p>
       <div className="cal__dots" data-phase={phase} aria-hidden="true">
         {Array.from({ length: CLICKS }, (_, i) => <i key={i} data-on={i < lit || undefined} />)}
       </div>
@@ -57,7 +63,7 @@ export function Calibration({ ref, onBusy }: { ref: Ref<HTMLDialogElement>; onBu
       <form method="dialog" className="cal__actions">
         <button className="btn btn--ghost" disabled={phase === 'running'}>{phase === 'ok' ? 'Fechar' : 'Cancelar'}</button>
         {phase !== 'ok' && (
-          <button type="button" className="btn btn--primary" onClick={run} disabled={phase === 'running'}>
+          <button type="button" className="btn btn--primary" onClick={run} disabled={phase === 'running' || activeTrack >= 0}>
             {phase === 'running' ? 'Ouvindo…' : phase === 'fail' ? 'Tentar de novo' : 'Começar'}
           </button>
         )}

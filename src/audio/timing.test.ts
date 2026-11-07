@@ -16,6 +16,7 @@ import {
   stepDuration,
   loopDuration,
   loopOffset,
+  liveStepToSkip,
   nextLoopStart,
   positionAt,
   timeToFrame,
@@ -153,5 +154,38 @@ describe('timing', () => {
     const w = renderWindow(1, dur, 48000, tail)
     expect(w.start).toBe(Math.round(Math.ceil(tail / dur) * dur * 48000))
     expect(w.start / 48000).toBeGreaterThanOrEqual(tail)
+  })
+})
+
+describe('liveStepToSkip', () => {
+  it('pula o passo futuro arredondado fora do lookahead', () => {
+    // 60 BPM: passo 4 em 1s; pad em 0.875s, antes do lookahead de 100ms.
+    expect(liveStepToSkip(4, 16, 3.5, 4)).toBe(4)
+  })
+
+  it('não pula a volta seguinte se a ocorrência já foi processada', () => {
+    expect(liveStepToSkip(4, 16, 3.8, 5)).toBeNull()
+    expect(liveStepToSkip(4, 16, 4.2, 5)).toBeNull()
+  })
+
+  it('identifica somente a ocorrência do ciclo atual', () => {
+    const skipped = liveStepToSkip(4, 16, 19.7, 20)
+    expect(skipped).toBe(20)
+    expect([20, 36, 52].filter((step) => step !== skipped)).toEqual([36, 52])
+  })
+
+  it('trata o arredondamento para zero na virada do loop', () => {
+    expect(liveStepToSkip(0, 16, 15.7, 16)).toBe(16)
+    expect(liveStepToSkip(0, 16, 15.7, 17)).toBeNull()
+    expect(liveStepToSkip(0, 32, 63.7, 64)).toBe(64)
+  })
+
+  it('mantém o passo recebido se o relógio avançar entre a UI e o motor', () => {
+    expect(liveStepToSkip(15, 16, 15.51, 16)).toBeNull()
+    expect(liveStepToSkip(15, 16, 15.51, 15)).toBe(15)
+  })
+
+  it('identifica uma ocorrência atrasada para ser consumida sem afetar outra volta', () => {
+    expect(liveStepToSkip(4, 16, 4.2, 3)).toBe(4)
   })
 })

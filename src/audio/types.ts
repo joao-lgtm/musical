@@ -30,6 +30,8 @@ export interface TrackState {
   readonly overdubbing: boolean
   /** Há um estado anterior (1 nível) para undo(track). */
   readonly canUndo: boolean
+  /** true quando o último take/overdub do canal mic foi descartado por estar mudo; volta a false ao armar, limpar, desfazer ou importar */
+  readonly silentTake: boolean
   /** Incrementa sempre que o áudio/padrão do canal muda (take, overdub, undo, import) — gatilho para reler picos. */
   readonly revision: number
 }
@@ -124,7 +126,8 @@ export interface LoopEngine {
   clearAll(): void
   /** Atualiza parâmetros do canal (merge parcial). Valores fora da faixa são limitados. */
   setTrack(track: number, params: Partial<TrackParams>): void
-  toggleStep(voice: number, step: number): void
+  /** skipNext: ao inserir via pad ao vivo, pula apenas a ocorrência quantizada ainda não processada pelo scheduler; as próximas voltas tocam normalmente. */
+  toggleStep(voice: number, step: number, opts?: { skipNext?: boolean }): void
   /** Substitui o padrão inteiro numa única notificação; redimensionado para bars*STEPS_PER_BAR (repete ou corta). */
   setPattern(pattern: boolean[][]): void
   /** Toca uma voz da bateria agora (pads ao vivo / prévia). */

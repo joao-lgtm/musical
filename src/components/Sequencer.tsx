@@ -31,7 +31,7 @@ export function Sequencer() {
     const pos = engine.getPosition()
     if (padRec && pos.playing && !pos.countIn && steps > 0) {
       const step = Math.round(pos.phase * steps) % steps
-      if (!engine.getState().pattern[v][step]) engine.toggleStep(v, step)
+      if (!engine.getState().pattern[v][step]) engine.toggleStep(v, step, { skipNext: true })
       root.current?.querySelector(`[data-voice="${v}"] > [data-step="${step}"]`)?.animate(
         [{ boxShadow: '0 0 0 3px #fff, 0 0 24px var(--c)' }, { boxShadow: '0 0 0 0 transparent' }],
         { duration: 450, easing: 'cubic-bezier(0.16, 1, 0.3, 1)' },

@@ -134,3 +134,9 @@ export function renderWindow(loops: number, dur: number, sampleRate: number, tai
   const length = Math.round(l * dur * sampleRate)
   return { loops: l, start, length, total: start + length }
 }
+
+/** Ocorrência absoluta do pad quantizado; null se o scheduler já passou por ela. */
+export function liveStepToSkip(step: number, steps: number, heardStep: number, nextStep: number): number | null {
+  const occurrence = Math.round((heardStep - step) / steps) * steps + step
+  return occurrence >= nextStep ? occurrence : null
+}

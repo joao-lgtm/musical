@@ -10,6 +10,7 @@ import {
   heardTime,
   isAccent,
   loopDuration,
+  liveStepToSkip,
   nudgedOffset,
   overdubMix,
   positionAt,
@@ -25,6 +26,7 @@ import {
   vuLevel,
 } from './timing'
 import { playDrum } from './drums'
+import { isSilent } from './silence'
 import { detectOnsets, estimateLatency } from './calibrate'
 import workletUrl from './recorder.worklet.ts?worker&url'
 
@@ -34,6 +36,7 @@ interface Rec {
   data: Float32Array
   filled: number // amostras capturadas a partir de startFrame
   overdub: boolean
+  previousUndo: AudioBuffer | null | undefined
 }
 
 interface Capture {
@@ -211,6 +214,7 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
   let t0 = 0
   let nextBeat = 0
   let nextStep = 0
+  const skippedSteps = new Map<string, number>()
   let timer: ReturnType<typeof setInterval> | undefined
   // undo de 1 nível: take anterior (null = vazio; undefined = sem undo) e padrão anterior
   const undoTake: (AudioBuffer | null | undefined)[] = Array(N).fill(undefined)
@@ -220,7 +224,7 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
 
   const defaultName = (i: number) => (i === D ? 'Bateria' : `Faixa ${i + 1}`)
   const blank = (kind: TrackState['kind'], name: string): TrackState => ({
-    kind, name, status: 'empty', volume: 0.8, muted: false, solo: false, pan: 0, filter: 1, delay: 0, reverb: 0, nudge: 0, overdubbing: false, canUndo: false, revision: 0,
+    kind, name, status: 'empty', volume: 0.8, muted: false, solo: false, pan: 0, filter: 1, delay: 0, reverb: 0, nudge: 0, overdubbing: false, canUndo: false, silentTake: false, revision: 0,
   })
   let state: EngineState = {
     status: 'idle',
@@ -247,7 +251,8 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
     set({ tracks })
   }
   /** Novo padrão + status do canal drums numa notificação só. */
-  function setPatternState(pattern: boolean[][], extra: Partial<EngineState> = {}) {
+  function setPatternState(pattern: boolean[][], extra: Partial<EngineState> = {}, keepSkips = false) {
+    if (!keepSkips) skippedSteps.clear()
     const tracks = state.tracks.slice()
     tracks[D] = { ...tracks[D], status: hasSteps(pattern) ? 'recorded' : 'empty', canUndo: undoPattern !== null, revision: tracks[D].revision + 1 }
     set({ ...extra, pattern, tracks })
@@ -351,10 +356,13 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
     const steps = state.bars * STEPS_PER_BAR
     for (; t0 + nextStep * sd < now + LOOKAHEAD; nextStep++) {
       const t = t0 + nextStep * sd
-      if (t < now || !drumBus) continue
       const s = nextStep % steps
       state.pattern.forEach((row, v) => {
-        if (row[s]) playDrum(c, drumBus!, DRUM_VOICES[v], t)
+        const key = `${v}:${s}`
+        const skipped = skippedSteps.get(key)
+        if (skipped !== undefined && skipped <= nextStep) skippedSteps.delete(key)
+        if (skipped === nextStep || t < now || !drumBus) return
+        if (row[s]) playDrum(c, drumBus, DRUM_VOICES[v], t)
       })
     }
     recs.forEach((r, i) => {
@@ -364,6 +372,7 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
 
   /** Reancora a grade em t0 (metrônomo e bateria). */
   function anchor(at: number, countIn: boolean) {
+    skippedSteps.clear()
     stopClicks()
     resetDrumBus()
     t0 = at
@@ -413,6 +422,23 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
   function finish(i: number, r: Rec) {
     const c = ctx!
     const old = buffers[i]
+    if (isSilent(r.data)) {
+      if (!r.overdub) {
+        buffers[i] = undoTake[i] ?? null
+        undoTake[i] = r.previousUndo
+        peaks[i] = null
+        startSource(i, c.currentTime + 0.02)
+      }
+      recs[i] = null
+      syncWorklet()
+      patchTrack(i, {
+        status: buffers[i] ? 'recorded' : 'empty',
+        canUndo: undoTake[i] !== undefined,
+        silentTake: true,
+        revision: rev(i),
+      })
+      return
+    }
     let buf: AudioBuffer
     if (r.overdub && old) {
       const shift = Math.round((state.tracks[i].nudge / 1000) * old.sampleRate)
@@ -429,7 +455,7 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
     recs[i] = null
     syncWorklet()
     startSource(i, c.currentTime + 0.02)
-    patchTrack(i, { status: 'recorded', canUndo: undoTake[i] !== undefined, revision: rev(i) })
+    patchTrack(i, { status: 'recorded', canUndo: undoTake[i] !== undefined, silentTake: false, revision: rev(i) })
   }
 
   function dropTrack(i: number) {
@@ -439,6 +465,7 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
   }
 
   function stopAll() {
+    skippedSteps.clear()
     abortCalib()
     clearInterval(timer)
     timer = undefined
@@ -593,7 +620,7 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
     }
     if (buffers[i]) undoTake[i] = buffers[i]
     dropTrack(i)
-    patchTrack(i, { status: 'empty', canUndo: undoTake[i] !== undefined, revision: rev(i) })
+    patchTrack(i, { status: 'empty', canUndo: undoTake[i] !== undefined, silentTake: false, revision: rev(i) })
   }
 
   function undo(i: number) {
@@ -606,13 +633,17 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
       return setPatternState(p)
     }
     const snap = undoTake[i]
-    if (recs[i] || snap === undefined) return
+    if (recs[i]) return
+    if (snap === undefined) {
+      if (state.tracks[i].silentTake) patchTrack(i, { silentTake: false })
+      return
+    }
     undoTake[i] = undefined
     buffers[i] = snap
     peaks[i] = null
     if (state.playing && ctx) startSource(i, ctx.currentTime + 0.02)
     else stopSource(i)
-    patchTrack(i, { status: snap ? 'recorded' : 'empty', canUndo: false, revision: rev(i) })
+    patchTrack(i, { status: snap ? 'recorded' : 'empty', canUndo: false, silentTake: false, revision: rev(i) })
   }
 
   async function calibrate(opts: { clicks?: number; onClick?: (i: number) => void } = {}): Promise<CalibrationResult | null> {
@@ -699,6 +730,7 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
       const c = ctx!
       void resume()
       if (recs[i]) return cancelRec(i)
+      const previousUndo = undoTake[i]
       const overdub = state.tracks[i].overdubbing && !!buffers[i]
       if (!overdub) {
         undoTake[i] = buffers[i] // substituir descarta o take ao armar (evita vazar no microfone)
@@ -714,9 +746,10 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
         data: new Float32Array(Math.ceil(state.loopDuration * sr)),
         filled: 0,
         overdub,
+        previousUndo,
       }
       syncWorklet()
-      patchTrack(i, { status: 'armed', canUndo: undoTake[i] !== undefined, revision: overdub ? state.tracks[i].revision : rev(i) })
+      patchTrack(i, { status: 'armed', silentTake: false, canUndo: undoTake[i] !== undefined, revision: overdub ? state.tracks[i].revision : rev(i) })
     },
 
     clear,
@@ -732,6 +765,7 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
         tracks: state.tracks.map((t, i) => ({
           ...t,
           status: 'empty' as const,
+          silentTake: false,
           revision: t.revision + 1,
           canUndo: i === D ? undoPattern !== null : undoTake[i] !== undefined,
         })),
@@ -748,12 +782,23 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
       if (next.nudge !== prev.nudge && state.playing && sources[i] && ctx) startSource(i, ctx.currentTime + 0.02)
     },
 
-    toggleStep(v, s) {
+    toggleStep(v, s, opts) {
       if (!ready() || !state.pattern[v] || !Number.isInteger(s) || s < 0 || s >= state.pattern[v].length) return
       const pattern = state.pattern.map((row) => row.slice())
       pattern[v][s] = !pattern[v][s]
+      const key = `${v}:${s}`
+      skippedSteps.delete(key)
+      if (pattern[v][s] && opts?.skipNext && state.playing && ctx) {
+        const occurrence = liveStepToSkip(
+          s,
+          state.bars * STEPS_PER_BAR,
+          (heardTime(ctx.currentTime, outLatency()) - t0) / stepDuration(state.bpm),
+          nextStep,
+        )
+        if (occurrence !== null) skippedSteps.set(key, occurrence)
+      }
       savePattern(true)
-      setPatternState(pattern)
+      setPatternState(pattern, {}, true)
     },
     setPattern(pattern) {
       if (!ready()) return
@@ -872,7 +917,7 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
           buffers[i] = new AudioBuffer({ numberOfChannels: 1, length: audio.length, sampleRate: sr })
           buffers[i]!.copyToChannel(Float32Array.from(audio), 0)
         }
-        return { ...mergeParams({ ...cur, name: defaultName(i) }, t ?? {}, defaultName(i)), status: buffers[i] ? ('recorded' as const) : ('empty' as const), canUndo: false, revision: cur.revision + 1 }
+        return { ...mergeParams({ ...cur, name: defaultName(i) }, t ?? {}, defaultName(i)), status: buffers[i] ? ('recorded' as const) : ('empty' as const), canUndo: false, silentTake: false, revision: cur.revision + 1 }
       })
       const pattern = resizePattern(
         DRUM_VOICES.map((_, v) => data.pattern?.[v] ?? []),
