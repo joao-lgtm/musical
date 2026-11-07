@@ -1,12 +1,25 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Key, LoopEngine, PadScale } from '../audio/types'
 import { PAD_COUNT, PAD_SCALES, INSTRUMENT_LABEL, INSTRUMENT_OCTAVE, isInstrument } from '../audio/types'
+import type { Chord } from '../audio/harmony'
+import { KEYS } from '../audio/types'
 import { padNotes } from '../audio/scale'
 import { useEngine, useEngineState } from '../hooks/useEngine'
 
 export const NOTE_CODES = ['KeyA', 'KeyS', 'KeyD', 'KeyF', 'KeyG', 'KeyH', 'KeyJ', 'KeyK', 'KeyL', 'Semicolon']
 const NOTE_KEYS = ['A', 'S', 'D', 'F', 'G', 'H', 'J', 'K', 'L', 'Ç']
 
+export interface CoachGuidance { track: number; phase: 'bass' | 'harmony' | 'melody'; chords: Chord[] }
+const guidance = new WeakMap<LoopEngine, CoachGuidance>()
+export function setCoachGuidance(engine: LoopEngine, value: CoachGuidance | null) {
+  if (value) guidance.set(engine, value)
+  else guidance.delete(engine)
+  window.dispatchEvent(new Event('loopstudio:coach-notes'))
+}
+export function chordPitches(chord: Chord, harmony: boolean) {
+  const root = KEYS.findIndex((key) => key === chord.name.replace(/m$/, ''))
+  return harmony ? [root, (root + (chord.name.endsWith('m') ? 3 : 4)) % 12] : [root]
+}
 const targets = new WeakMap<LoopEngine, number>()
 export const rememberInstrument = (engine: LoopEngine, track: number) => { targets.set(engine, track) }
 export const lastInstrument = (engine: LoopEngine) => targets.get(engine)
@@ -18,6 +31,42 @@ export function NotePads({ track }: { track: number }) {
   const { key, scale, status, tracks } = useEngineState(engine)
   const source = tracks[track].source
   const instrument = isInstrument(source) ? source : 'ocarina'
+  const padRoot = useRef<HTMLDivElement>(null)
+  const [coach, setCoach] = useState<CoachGuidance | null>(null)
+  useEffect(() => {
+    const update = () => { const value = guidance.get(engine); setCoach(value?.track === track ? value : null) }
+    window.addEventListener('loopstudio:coach-notes', update)
+    update()
+    return () => window.removeEventListener('loopstudio:coach-notes', update)
+  }, [engine, track])
+  useEffect(() => {
+    if (!coach || coach.phase === 'melody') return
+    let frame = 0
+    const buttons = padRoot.current?.querySelectorAll<HTMLButtonElement>('[data-degree]')
+    const reduced = matchMedia('(prefers-reduced-motion: reduce)')
+    const update = () => {
+      const pos = engine.getPosition()
+      const snapshot = engine.getState()
+      const playing = snapshot.tracks[track]?.status === 'recording' && pos.playing && !pos.countIn
+      const at = pos.phase * snapshot.bars * 16
+      const chord = coach.chords.find((c) => at >= c.step && at < c.step + c.length)
+      const pitches = playing && chord ? chordPitches(chord, coach.phase === 'harmony') : []
+      const midis = padNotes(snapshot.key, snapshot.scale, INSTRUMENT_OCTAVE[instrument])
+      const growth = reduced.matches ? 1 : 0.2 + 0.8 * ((pos.phase * snapshot.bars * (coach.phase === 'harmony' ? 2 : 1)) % 1)
+      buttons?.forEach((button, degree) => {
+        if (pitches.includes(midis[degree] % 12)) {
+          button.setAttribute('data-coach-note', '')
+          button.style.setProperty('--coach-grow', String(growth))
+        } else { button.removeAttribute('data-coach-note'); button.style.removeProperty('--coach-grow') }
+      })
+      frame = requestAnimationFrame(update)
+    }
+    frame = requestAnimationFrame(update)
+    return () => {
+      cancelAnimationFrame(frame)
+      buttons?.forEach((button) => { button.removeAttribute('data-coach-note'); button.style.removeProperty('--coach-grow') })
+    }
+  }, [engine, track, coach, instrument, key, scale])
   const held = useRef(new Map<string, number>())
   const [pressed, setPressed] = useState<number[]>([])
   const notes = padNotes(key, scale, INSTRUMENT_OCTAVE[instrument]).slice(0, PAD_COUNT[scale])
@@ -60,7 +109,7 @@ export function NotePads({ track }: { track: number }) {
           {PAD_SCALES.map((value) => <option key={value} value={value}>{value === 'major' ? 'Maior (todas as notas)' : 'Pentatônica (nunca erra)'}</option>)}
         </select>
       </label>
-    <div className="note-pads" data-scale={scale} data-track={track} role="group" aria-label={`Notas de ${INSTRUMENT_LABEL[instrument]}, faixa ${track + 1}`}>
+    <div ref={padRoot} className="note-pads" data-scale={scale} data-track={track} role="group" aria-label={`Notas de ${INSTRUMENT_LABEL[instrument]}, faixa ${track + 1}`}>
       {notes.map((midi, degree) => {
         const name = NOTE_NAMES[midi % 12]
         const octave = Math.floor(midi / 12) - 1

@@ -7,7 +7,7 @@ function state(): EngineState {
     status: 'ready', error: null, mic: 'off', micError: null, micTrack: null,
     bpm: 120, bars: 1, metronome: false, latencyOffset: 0, playing: false,
     loopDuration: 2, masterVolume: 1, key: 'C', scale: 'pentatonic',
-    isolateRecording: false, canRestoreTrack: false,
+    isolateRecording: false, canRestoreTrack: false, canUndoBatch: false, liveDrums: true,
     pattern: Array.from({ length: 4 }, () => Array<boolean>(16).fill(false)),
     tracks: [{
       kind: 'mic', name: 'Faixa 1', status: 'empty', volume: 1, muted: false,
@@ -43,6 +43,18 @@ describe('hasDraftContentChanged', () => {
       { isolateRecording: true, canRestoreTrack: true },
     ]) {
       expect(hasDraftContentChanged(base, { ...base, ...patch })).toBe(false)
+    }
+  })
+
+  it('ignora undo em lote e preferencia de bateria viva', () => {
+    const base = state()
+    for (const patch of [
+      { canUndoBatch: true }, { liveDrums: false },
+      { canUndoBatch: true, liveDrums: false },
+    ]) {
+      const next = { ...base, ...patch }
+      expect(hasDraftContentChanged(base, next)).toBe(false)
+      expect(observeDraft(createDraftProgress(base), next).dirty).toBe(false)
     }
   })
 

@@ -26,6 +26,7 @@ import {
   vuLevel,
 } from './timing'
 import { playDrum } from './drums'
+import { fillPattern, humanize, isFillBar } from './groove'
 import { isSilent } from './silence'
 import { padNotes } from './scale'
 import { renderNotes, startVoice, type Note, type Voice } from './synth'
@@ -35,6 +36,7 @@ import workletUrl from './recorder.worklet.ts?worker&url'
 interface TakeSnapshot {
   buffer: AudioBuffer | null
   source: TrackSource
+  reverb: number
 }
 
 interface LiveVoice {
@@ -216,6 +218,7 @@ const hasSteps = (p: readonly (readonly boolean[])[]) => p.some((row) => row.som
 const emptyPattern = (bars: number) => DRUM_VOICES.map(() => Array<boolean>(bars * STEPS_PER_BAR).fill(false))
 
 export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
+  const grooveSeed = Math.floor(Math.random() * 0x100000000)
   const n = opts.tracks ?? 8 // canais mic
   const N = n + 1 // + bateria
   const D = n // índice do canal drums
@@ -256,13 +259,17 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
   let timer: ReturnType<typeof setInterval> | undefined
   // undo de 1 nível: take/source anteriores (buffer null = vazio; undefined = sem undo) e padrão anterior
   const undoTake: (TakeSnapshot | undefined)[] = Array(N).fill(undefined)
-  const takeSnapshot = (i: number): TakeSnapshot => ({ buffer: buffers[i], source: state.tracks[i].source })
+  const takeSnapshot = (i: number): TakeSnapshot => ({ buffer: buffers[i], source: state.tracks[i].source, reverb: state.tracks[i].reverb })
   let removedTrack: {
     index: number
     track: TrackState
     buffer: AudioBuffer | null
     undo: TakeSnapshot | undefined
     peaks: (typeof peaks)[number]
+  } | null = null
+  let batchUndo: {
+    tracks: { index: number; take: TakeSnapshot; undo: TakeSnapshot | undefined; silentTake: boolean }[]
+    pattern?: { data: boolean[][]; undo: boolean[][] | null; lastToggle: number }
   } | null = null
   let undoPattern: boolean[][] | null = null
   let lastToggle = 0
@@ -289,10 +296,37 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
     scale: 'pentatonic',
     isolateRecording: false,
     canRestoreTrack: false,
+    canUndoBatch: false,
+    liveDrums: true,
     tracks: Array.from({ length: N }, (_, i) => blank(i === D ? 'drums' : 'mic', defaultName(i))),
     pattern: emptyPattern(2),
   }
   const listeners = new Set<(s: EngineState) => void>()
+
+  function invalidateBatch(index?: number) {
+    if (!batchUndo || index !== undefined && !batchUndo.tracks.some((track) => track.index === index)) return
+    batchUndo = null
+    set({ canUndoBatch: false })
+  }
+
+  function prepareTake(samples: Float32Array, sampleRate = ctx!.sampleRate) {
+    if (!Number.isFinite(sampleRate) || sampleRate <= 0) throw new Error('Sample rate invalido')
+    const c = ctx!
+    const buffer = c.createBuffer(1, Math.ceil(state.loopDuration * c.sampleRate), c.sampleRate)
+    const data = buffer.getChannelData(0)
+    if (sampleRate === c.sampleRate) data.set(samples.subarray(0, data.length))
+    else {
+      const ratio = sampleRate / c.sampleRate
+      for (let j = 0; j < data.length; j++) {
+        const x = j * ratio
+        const k = Math.floor(x)
+        if (k >= samples.length) break
+        const a = samples[k]
+        data[j] = a + ((samples[k + 1] ?? a) - a) * (x - k)
+      }
+    }
+    return buffer
+  }
 
   function set(patch: Partial<EngineState>) {
     state = { ...state, ...patch }
@@ -306,6 +340,7 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
   }
   /** Novo padrão + status do canal drums numa notificação só. */
   function setPatternState(pattern: boolean[][], extra: Partial<EngineState> = {}, keepSkips = false) {
+    invalidateBatch()
     if (!keepSkips) skippedSteps.clear()
     const tracks = state.tracks.slice()
     tracks[D] = { ...tracks[D], status: hasSteps(pattern) ? 'recorded' : 'empty', canUndo: undoPattern !== null, revision: tracks[D].revision + 1 }
@@ -333,6 +368,22 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
       gain.setValueAtTime(state.masterVolume * Math.max(0, (now - fadeStart) / (fadeEnd - fadeStart)), now)
       gain.linearRampToValueAtTime(state.masterVolume, fadeEnd)
     } else mix.master.gain.setTargetAtTime(state.masterVolume, now, 0.01)
+  }
+
+  function makeSource(i: number, buffer: AudioBuffer, when: number) {
+    const src = ctx!.createBufferSource()
+    try {
+      src.buffer = buffer
+      src.loop = true
+      src.loopEnd = state.loopDuration
+      src.connect(mix!.ch[i].input)
+      src.start(when, nudgedOffset(when, t0, state.loopDuration, state.tracks[i].nudge / 1000))
+      return src
+    } catch (e) {
+      try { src.stop() } catch { /* ainda não iniciou */ }
+      src.disconnect()
+      throw e
+    }
   }
 
   function startSource(i: number, when: number) {
@@ -406,6 +457,23 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
     }
   }
 
+  function drumStep(s: EngineState, absoluteStep: number) {
+    const steps = s.bars * STEPS_PER_BAR
+    const step = ((absoluteStep % steps) + steps) % steps
+    if (s.liveDrums && isFillBar(Math.floor(absoluteStep / STEPS_PER_BAR))) {
+      const start = step - step % STEPS_PER_BAR
+      return fillPattern(s.pattern.map((row) => row.slice(start, start + STEPS_PER_BAR)))
+        .map((row) => row[step % STEPS_PER_BAR])
+    }
+    return s.pattern.map((row) => row[step])
+  }
+
+  function scheduleDrum(c: BaseAudioContext, dest: AudioNode, s: EngineState, voice: DrumVoice, absoluteStep: number, time: number, now: number) {
+    if (!s.liveDrums) return playDrum(c, dest, voice, time)
+    const { velocity, offset } = humanize(voice, absoluteStep, grooveSeed)
+    playDrum(c, dest, voice, Math.max(now, time + offset), velocity)
+  }
+
   function tick() {
     const c = ctx!
     const now = c.currentTime
@@ -421,12 +489,12 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
     for (; t0 + nextStep * sd < now + LOOKAHEAD; nextStep++) {
       const t = t0 + nextStep * sd
       const s = nextStep % steps
-      state.pattern.forEach((row, v) => {
+      drumStep(state, nextStep).forEach((on, v) => {
         const key = `${v}:${s}`
         const skipped = skippedSteps.get(key)
         if (skipped !== undefined && skipped <= nextStep) skippedSteps.delete(key)
         if (skipped === nextStep || t < now || !drumBus) return
-        if (row[s]) playDrum(c, drumBus, DRUM_VOICES[v], t)
+        if (on) scheduleDrum(c, drumBus, state, DRUM_VOICES[v], nextStep, t, now)
       })
     }
     recs.forEach((r, i) => {
@@ -834,6 +902,7 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
 
   function setTiming(patch: Partial<EngineState>) {
     if (!ready() || locked()) return false
+    invalidateBatch()
     // take antigo teria outra duração: descarta o undo dos canais mic
     if (undoTake.some((u) => u !== undefined)) {
       undoTake.fill(undefined)
@@ -856,6 +925,7 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
 
   function clear(i: number) {
     if (!valid(i)) return
+    invalidateBatch(i === D ? undefined : i)
     if (i === D) {
       if (!hasSteps(state.pattern)) return
       savePattern(false)
@@ -893,7 +963,7 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
     peaks[i] = null
     if (state.playing && ctx) startSource(i, ctx.currentTime + 0.02)
     else stopSource(i)
-    patchTrack(i, { status: snap.buffer ? 'recorded' : 'empty', source: snap.source, canUndo: false, silentTake: false, revision: rev(i) })
+    patchTrack(i, { status: snap.buffer ? 'recorded' : 'empty', source: snap.source, reverb: snap.reverb, canUndo: false, silentTake: false, revision: rev(i) })
   }
 
   async function calibrate(opts: { clicks?: number; onClick?: (i: number) => void } = {}): Promise<CalibrationResult | null> {
@@ -953,6 +1023,7 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
   }
   function removeTrack(i: number) {
     if (!valid(i) || i === D || busy() || recording()) return
+    invalidateBatch()
     removedTrack = { index: i, track: state.tracks[i], buffer: buffers[i], undo: undoTake[i], peaks: peaks[i] }
     stopShifted(i)
     const tracks = state.tracks.slice()
@@ -972,6 +1043,7 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
   function restoreTrack() {
     if (!ready() || busy() || recording() || !removedTrack || buffers[n - 1] || state.tracks[n - 1].status !== 'empty') return
     const saved = removedTrack
+    invalidateBatch()
     stopShifted(saved.index)
     const tracks = state.tracks.slice()
     for (let j = n - 1; j > saved.index; j--) {
@@ -992,6 +1064,7 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
 
   function record(i: number) {
     if (!valid(i) || i === D || busy()) return
+    invalidateBatch(i)
     if (state.tracks[i].source === 'mic' && state.mic !== 'ready') {
       if (state.mic === 'requesting' && state.micTrack === i) {
         set({ micTrack: null })
@@ -1042,6 +1115,7 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
 
     dispose() {
       if (state.status === 'disposed') return
+      invalidateBatch()
       teardown()
       removedTrack = null
       for (let i = 0; i < N; i++) {
@@ -1107,6 +1181,7 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
     },
     clearAll() {
       if (!ready() || busy()) return
+      invalidateBatch()
       stopAll()
       removedTrack = null
       if (hasSteps(state.pattern)) savePattern(false)
@@ -1184,19 +1259,8 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
       const c = ctx!
       const sampleRate = opts.sampleRate ?? c.sampleRate
       if (!Number.isFinite(sampleRate) || sampleRate <= 0) return
-      const buffer = c.createBuffer(1, Math.ceil(state.loopDuration * c.sampleRate), c.sampleRate)
-      const data = buffer.getChannelData(0)
-      if (sampleRate === c.sampleRate) data.set(samples.subarray(0, data.length))
-      else {
-        const ratio = sampleRate / c.sampleRate
-        for (let j = 0; j < data.length; j++) {
-          const x = j * ratio
-          const k = Math.floor(x)
-          if (k >= samples.length) break
-          const a = samples[k]
-          data[j] = a + ((samples[k + 1] ?? a) - a) * (x - k)
-        }
-      }
+      const buffer = prepareTake(samples, sampleRate)
+      invalidateBatch(i)
       const source = validSource(opts.source) ? opts.source : state.tracks[i].source
       undoTake[i] = takeSnapshot(i)
       if (source !== state.tracks[i].source) stopLive(i)
@@ -1205,6 +1269,122 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
       peaks[i] = null
       if (state.playing) startSource(i, c.currentTime + 0.02)
       patchTrack(i, { source, reverb: sourceReverb(source, state.tracks[i].reverb), status: 'recorded', canUndo: true, silentTake: false, revision: rev(i) })
+    },
+
+    applyBatch(batch) {
+      if (!ready() || busy() || recording()) return false
+      const takes = batch.takes ?? []
+      if (!takes.length && batch.pattern === undefined) return false
+      const seen = new Set<number>()
+      for (const take of takes) {
+        if (!valid(take.track) || take.track === D || seen.has(take.track) ||
+          !(take.samples instanceof Float32Array) ||
+          take.source !== undefined && !validSource(take.source) ||
+          take.sampleRate !== undefined && (!Number.isFinite(take.sampleRate) || take.sampleRate <= 0)) return false
+        seen.add(take.track)
+      }
+      if (batch.pattern !== undefined && (!Array.isArray(batch.pattern) || !batch.pattern.every(Array.isArray))) return false
+      let prepared: { index: number; buffer: AudioBuffer; source: TrackSource }[]
+      let pattern: boolean[][] | undefined
+      try {
+        prepared = takes.map((take) => ({
+          index: take.track, buffer: prepareTake(take.samples, take.sampleRate),
+          source: take.source ?? state.tracks[take.track].source,
+        }))
+        if (batch.pattern !== undefined) pattern = resizePattern(DRUM_VOICES.map((_, v) => batch.pattern![v] ?? []), state.bars * STEPS_PER_BAR)
+      } catch { return false }
+      const saved = {
+        tracks: prepared.map(({ index }) => ({ index, take: takeSnapshot(index), undo: undoTake[index], silentTake: state.tracks[index].silentTake })),
+        pattern: pattern ? { data: state.pattern.map((row) => row.slice()), undo: undoPattern, lastToggle } : undefined,
+      }
+      const staged = new Map<number, AudioBufferSourceNode>()
+      const originals = prepared.map(({ index }) => ({ index, source: sources[index], peaks: peaks[index], onended: sources[index]?.onended ?? null }))
+      const stopped = new Set<number>()
+      const when = Math.max(ctx!.currentTime + 0.02, t0)
+      const tracks = state.tracks.slice()
+      try {
+        // Fontes antigas seguem em fase enquanto todas as novas são preparadas.
+        if (state.playing) for (const { index, buffer } of prepared) staged.set(index, makeSource(index, buffer, when))
+        for (const { index, buffer, source } of prepared) {
+          buffers[index] = buffer
+          undoTake[index] = undefined
+          peaks[index] = null
+          tracks[index] = { ...tracks[index], source, reverb: sourceReverb(source, tracks[index].reverb), status: 'recorded', canUndo: false, silentTake: false, revision: rev(index) }
+          if (state.playing) {
+            const old = sources[index]
+            if (old) {
+              retiring[index].add(old)
+              old.onended = () => { retiring[index].delete(old); old.disconnect() }
+              old.stop(when)
+              stopped.add(index)
+            }
+            sources[index] = staged.get(index)!
+          }
+        }
+      } catch {
+        for (const src of staged.values()) {
+          try { src.stop() } catch { /* já terminou */ }
+          src.disconnect()
+        }
+        for (const { index, take, undo } of saved.tracks) {
+          buffers[index] = take.buffer
+          undoTake[index] = undo
+        }
+        for (const old of originals) {
+          const { index, source } = old
+          peaks[index] = old.peaks
+          sources[index] = source
+          if (source) {
+            retiring[index].delete(source)
+            source.onended = old.onended
+          }
+          if (stopped.has(index)) {
+            try { source?.stop() } catch { /* já terminou */ }
+            source?.disconnect()
+            sources[index] = null
+            if (buffers[index]) {
+              try { sources[index] = makeSource(index, buffers[index]!, when) } catch { /* contexto indisponível */ }
+            }
+          }
+        }
+        return false
+      }
+      for (const { index, source } of prepared) if (source !== state.tracks[index].source) stopLive(index)
+      if (pattern) {
+        undoPattern = null
+        lastToggle = 0
+        skippedSteps.clear()
+        tracks[D] = { ...tracks[D], status: hasSteps(pattern) ? 'recorded' : 'empty', canUndo: false, revision: rev(D) }
+      }
+      batchUndo = saved
+      set({ tracks, ...(pattern ? { pattern } : {}), micTrack: state.micTrack !== null && seen.has(state.micTrack) ? null : state.micTrack, canUndoBatch: true })
+      return true
+    },
+
+    undoBatch() {
+      if (!ready() || busy() || recording() || !batchUndo) return
+      const saved = batchUndo
+      batchUndo = null
+      const tracks = state.tracks.slice()
+      for (const { index, take, undo, silentTake } of saved.tracks) {
+        if (take.source !== tracks[index].source) stopLive(index)
+        buffers[index] = take.buffer
+        undoTake[index] = undo
+        peaks[index] = null
+        tracks[index] = { ...tracks[index], source: take.source, reverb: take.reverb, status: take.buffer ? 'recorded' : 'empty', canUndo: undo !== undefined, silentTake, revision: rev(index) }
+      }
+      if (saved.pattern) {
+        undoPattern = saved.pattern.undo
+        lastToggle = saved.pattern.lastToggle
+        skippedSteps.clear()
+        tracks[D] = { ...tracks[D], status: hasSteps(saved.pattern.data) ? 'recorded' : 'empty', canUndo: undoPattern !== null, revision: rev(D) }
+      }
+      set({ tracks, ...(saved.pattern ? { pattern: saved.pattern.data } : {}), canUndoBatch: false })
+      if (state.playing) for (const { index } of saved.tracks) startSource(index, ctx!.currentTime + 0.02)
+    },
+
+    setLiveDrums(on) {
+      if (ready() && on !== state.liveDrums) set({ liveDrums: on })
     },
 
     getArmedIn(i) {
@@ -1275,9 +1455,11 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
       }
       const sd = stepDuration(s.bpm)
       const steps = s.bars * STEPS_PER_BAR
-      for (let k = 0; k < (win.loops + 1) * steps; k++) {
-        s.pattern.forEach((row, v) => {
-          if (row[k % steps]) playDrum(off, m.ch[D].input, DRUM_VOICES[v], k * sd)
+      const warmSteps = Math.round(win.start / (dur * sr)) * steps
+      for (let k = 0; k * sd < win.total / sr; k++) {
+        const absoluteStep = k - warmSteps
+        drumStep(s, absoluteStep).forEach((on, v) => {
+          if (on) scheduleDrum(off, m.ch[D].input, s, DRUM_VOICES[v], absoluteStep, k * sd, 0)
         })
       }
       const full = await off.startRendering()
@@ -1308,6 +1490,7 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
 
     importProject(data) {
       if (!ready() || busy() || data?.version !== 1) return
+      invalidateBatch()
       stopAll()
       removedTrack = null
       undoTake.fill(undefined)

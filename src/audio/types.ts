@@ -110,6 +110,10 @@ export interface EngineState {
   readonly isolateRecording: boolean
   /** Há uma faixa removida que restoreTrack() pode recolocar (1 nível). */
   readonly canRestoreTrack: boolean
+  /** Há uma aplicação em lote (applyBatch) que undoBatch() pode desfazer inteira. */
+  readonly canUndoBatch: boolean
+  /** Bateria viva: virada no último compasso de cada 4 tocados + humanização de intensidade e microtempo (±5 ms). Padrão true. Vale também para renderMix. */
+  readonly liveDrums: boolean
   /** 8 canais mic + 1 canal drums no fim (índice tracks.length - 1). */
   readonly tracks: readonly TrackState[]
   /** pattern[voz][passo], voz na ordem de DRUM_VOICES, bars * STEPS_PER_BAR passos. */
@@ -186,6 +190,15 @@ export interface LoopEngine {
   /** Recoloca a última faixa removida na posição original (empurrando as seguintes). Ignorado se canRestoreTrack for false ou houver gravação em curso. */
   restoreTrack(): void
   setIsolateRecording(on: boolean): void
+  setLiveDrums(on: boolean): void
+  /**
+   * Aplica numa operação só vários takes gerados (mesmas regras de applyTake) e, opcionalmente, um padrão de bateria, com UM desfazer composto.
+   * Tudo ou nada: se algum canal estiver armado/gravando, em calibração ou inválido, nada muda e retorna false.
+   * O lote invalida o undo individual dos canais envolvidos; undoBatch restaura takes, sources e padrão anteriores.
+   * canUndoBatch vira false após undoBatch, nova gravação/limpeza/applyTake nesses canais, setPattern/toggleStep, mudança de BPM/compassos, removeTrack, importProject, clearAll ou dispose.
+   */
+  applyBatch(batch: { takes?: { track: number; samples: Float32Array; sampleRate?: number; source?: TrackSource }[]; pattern?: boolean[][] }): boolean
+  undoBatch(): void
   /** Atualiza parâmetros do canal (merge parcial). Valores fora da faixa são limitados. */
   setTrack(track: number, params: Partial<TrackParams>): void
   /** skipNext: ao inserir via pad ao vivo, pula apenas a ocorrência quantizada ainda não processada pelo scheduler; as próximas voltas tocam normalmente. */

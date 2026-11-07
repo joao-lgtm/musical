@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { DRUM_VOICES, STEPS_PER_BAR, type DrumVoice } from '../audio/types'
 import { useEngine, useEngineState, useFrame } from '../hooks/useEngine'
+import { BatchActions } from './BatchActions'
 import { DEMO_PRESET, surprise, toPattern } from './drumPresets'
 import s from './Sequencer.module.css'
 
@@ -119,6 +120,7 @@ export function Sequencer({ coachStep = null }: { coachStep?: number | null }) {
         </div>
       </header>
 
+      <BatchActions />
       <div className={s.pads} role="group" aria-label="Pads ao vivo" data-rec={padRec || undefined}>
         {DRUM_VOICES.map((voice, v) => (
           <button

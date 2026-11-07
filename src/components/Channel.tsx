@@ -7,6 +7,7 @@ import { readFrame, useEngine, useEngineState, useFrame } from '../hooks/useEngi
 import { Fader } from './Fader'
 import { MuteIcon, RecIcon, TrashIcon, UndoIcon } from './Icons'
 import { Knob } from './Knob'
+import { BatchActions } from './BatchActions'
 import { TransformMenu } from './TransformMenu'
 import { TrackName } from './TrackName'
 import { VuMeter } from './VuMeter'
@@ -137,6 +138,7 @@ export function Channel({ index, track, transportPlaying, studio, hint, dimmed, 
       </button>
 
       <TransformMenu track={index} />
+      <BatchActions track={index} />
       <button type="button" className="btn btn--ghost strip__remove" disabled={anyRecording}
         onClick={() => window.dispatchEvent(new CustomEvent('loopstudio:remove-track', { detail: index }))}>
         Remover faixa
