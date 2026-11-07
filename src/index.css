@@ -593,6 +593,24 @@ input[type='range']::-moz-range-thumb { width: 16px; height: 24px; border: 0; bo
 
 /* faixa-guia: frase + oferta de calibração */
 .guide p { flex: 1; min-width: 0; }
+.guide { flex-wrap: wrap; }
+.guide--warning {
+  background: linear-gradient(90deg, rgb(255 209 115 / 0.1), rgb(255 209 115 / 0.02) 70%);
+  box-shadow: inset 0 0 0 1px rgb(255 209 115 / 0.35);
+}
+.guide--warning .guide__dot { background: #ffd173; box-shadow: 0 0 12px rgb(255 209 115 / 0.4); animation: none; }
+.guide__touch { display: none; }
+.guide__action { flex: none; min-width: 44px; min-height: 44px; max-width: 100%; }
+.guide__action:focus-visible { outline: 2px solid var(--ch1-lit); outline-offset: 3px; }
+@media (hover: none) {
+  .guide kbd, .guide__desktop { display: none; }
+  .guide__touch { display: inline; }
+}
+@media (max-width: 480px) {
+  .guide p { flex-basis: calc(100% - 20px); }
+  .guide__action { width: 100%; }
+  .guide .guide__cal { max-width: 100%; min-height: 44px; }
+}
 .guide__cal {
   flex: none; min-height: 36px; padding: 0 12px; border: 0; border-radius: 6px;
   background: transparent; color: var(--ch1-lit); font-weight: 650; font-size: 0.8125rem; cursor: pointer;
@@ -617,6 +635,7 @@ input[type='range']::-moz-range-thumb { width: 16px; height: 24px; border: 0; bo
 
 /* modo performance */
 .perf { position: fixed; inset: 0; z-index: 40; background: #050608; }
+.perf:focus { outline: none; }
 .perf__canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
 .perf__hud { position: absolute; font-size: 0.875rem; color: var(--screen-ink-2); font-variant-numeric: tabular-nums; }
 .perf__hud--meta { left: clamp(16px, 3vw, 32px); bottom: clamp(16px, 3vw, 28px); font-size: 1rem; }

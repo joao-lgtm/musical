@@ -14,7 +14,9 @@ type Ring = { peaks: Float32Array | null; rev: number; status: string; n: number
 export function Performance({ state, onExit }: { state: EngineState; onExit: () => void }) {
   const engine = useEngine()
   const canvas = useRef<HTMLCanvasElement>(null)
-  const exit = useRef<HTMLButtonElement>(null)
+  const opener = useRef(document.activeElement)
+  const restoreFrame = useRef<number | undefined>(undefined)
+  const stage = useRef<HTMLDivElement>(null)
   const size = useRef({ w: 0, h: 0, dpr: 1 })
   const colors = useRef<string[]>([])
   const rings = useRef<Ring[]>([])
@@ -26,7 +28,8 @@ export function Performance({ state, onExit }: { state: EngineState; onExit: () 
   })
 
   useEffect(() => {
-    exit.current?.focus()
+    cancelAnimationFrame(restoreFrame.current ?? 0)
+    stage.current?.focus()
     const c = canvas.current!
     const cs = getComputedStyle(document.documentElement)
     colors.current = Array.from({ length: 9 }, (_, i) => cs.getPropertyValue(`--ch${i + 1}-lit`).trim() || '#fff')
@@ -40,7 +43,13 @@ export function Performance({ state, onExit }: { state: EngineState; onExit: () 
       c.height = Math.round(r.height * dpr)
     })
     ro.observe(c)
-    return () => ro.disconnect()
+    return () => {
+      ro.disconnect()
+      restoreFrame.current = requestAnimationFrame(() => {
+        const el = opener.current
+        if (el instanceof HTMLElement && el.isConnected && !el.closest('[inert]')) el.focus()
+      })
+    }
   }, [])
 
   useFrame(() => {
@@ -173,7 +182,7 @@ export function Performance({ state, onExit }: { state: EngineState; onExit: () 
 
   return (
     // foco no próprio palco: Espaço continua controlando o transporte
-    <div className="perf" role="dialog" aria-modal="true" aria-label="Modo performance" tabIndex={-1} autoFocus>
+    <div ref={stage} className="perf" role="dialog" aria-modal="true" aria-label="Palco do modo Performance. Espaço para tocar ou pausar; Esc para sair." tabIndex={-1}>
       <canvas ref={canvas} className="perf__canvas" aria-hidden="true" />
       <p className="perf__hud perf__hud--meta" role="status">
         <strong>{layers}</strong> {layers === 1 ? 'camada' : 'camadas'} <span aria-hidden="true">·</span> {state.bpm} BPM
@@ -181,7 +190,7 @@ export function Performance({ state, onExit }: { state: EngineState; onExit: () 
       <p className="perf__hud perf__hud--keys" aria-hidden="true">
         <kbd>1</kbd>–<kbd>8</kbd> grava · <kbd>Espaço</kbd> · <kbd>Q</kbd><kbd>W</kbd><kbd>E</kbd><kbd>R</kbd>
       </p>
-      <button ref={exit} className="btn btn--sm btn--ghost perf__exit" onClick={onExit}>
+      <button className="btn btn--sm btn--ghost perf__exit" onClick={onExit}>
         Sair <kbd>Esc</kbd>
       </button>
     </div>
