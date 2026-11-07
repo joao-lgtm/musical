@@ -2,11 +2,12 @@ import { PAD_COUNT, isInstrument } from './audio/types'
 import { useEffect, useRef, useState } from 'react'
 import { Calibration } from './components/Calibration'
 import { CountIn } from './components/CountIn'
-import { GuideBar, SurpriseButton } from './components/GuideBar'
+import { GuideBar } from './components/GuideBar'
 import { Mixer } from './components/Mixer'
 import { NOTE_CODES, lastInstrument, rememberInstrument } from './components/NotePads'
 import { Performance } from './components/Performance'
 import { ProjectBar } from './components/ProjectBar'
+import { BatchActions } from './components/BatchActions'
 import { Coach } from './components/Coach'
 import { Shortcuts } from './components/Shortcuts'
 import { StartScreen } from './components/StartScreen'
@@ -231,7 +232,7 @@ export default function App() {
         <ProjectBar />
         <div className="cue">
           <GuideBar state={state} onCalibrate={() => calRef.current?.showModal()} />
-          <SurpriseButton />
+          <BatchActions />
         </div>
         <div ref={removalStatus} className="track-removal" tabIndex={-1} aria-label="Ações de faixa">
           <span role="status">{removedNotice ? 'Faixa removida.' : ''}</span>

@@ -4,9 +4,8 @@ import type { StylePreset } from './stylePresets'
 import { INSTRUMENT_LABEL, isInstrument } from '../audio/types'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import { useEngine, useEngineState } from '../hooks/useEngine'
+import { useEngine } from '../hooks/useEngine'
 import { surprise } from './drumPresets'
-import { DiceIcon } from './Icons'
 import { loopFilename, renderLoopWav, shareOrDownload } from '../storage/share'
 import type { LoopEngine } from '../audio/types'
 import type { EngineState } from '../audio/types'
@@ -158,9 +157,9 @@ export function GuideBar({ state, onCalibrate }: { state: EngineState; onCalibra
     label = `Gravar faixa ${free}`
     action = () => engine.record(free - 1)
   } else if (layers === 2) {
-    msg = <>Solte a bateria: toque os pads <kbd>Q</kbd> <kbd>W</kbd> <kbd>E</kbd> <kbd>R</kbd> ou peça um “Surpreenda-me”.</>
-    touchMsg = <>Solte a bateria: toque em Surpreenda-me para criar um ritmo.</>
-    label = 'Surpreenda-me'
+    msg = <>Solte a bateria: toque os pads <kbd>Q</kbd> <kbd>W</kbd> <kbd>E</kbd> <kbd>R</kbd> ou peça um “Sortear batida”.</>
+    touchMsg = <>Solte a bateria: toque em Sortear batida para criar um ritmo.</>
+    label = 'Sortear batida'
     action = () => { lastPreset.current = surprise(engine, lastPreset.current) }
   }
 
@@ -226,30 +225,6 @@ export function GuideBar({ state, onCalibrate }: { state: EngineState; onCalibra
         </button>
       )}
     </div>
-  )
-}
-
-// Atalho compacto para o "Surpreenda-me" perto do topo (no celular o Sequencer fica no fim da página)
-export function SurpriseButton() {
-  const engine = useEngine()
-  const ready = useEngineState(engine).status === 'ready'
-  const last = useRef<string | undefined>(undefined)
-  const [picked, setPicked] = useState<string | null>(null)
-  const timer = useRef<ReturnType<typeof setTimeout>>(undefined)
-  useEffect(() => () => clearTimeout(timer.current), [])
-
-  function go() {
-    last.current = surprise(engine, last.current)
-    setPicked(last.current)
-    clearTimeout(timer.current)
-    timer.current = setTimeout(() => setPicked(null), 2000)
-  }
-
-  return (
-    <button className="btn btn--sm cue__surprise" onClick={go} disabled={!ready}>
-      <DiceIcon size={16} />
-      <span aria-live="polite">{picked ? `Bateria: ${picked}` : 'Surpreenda-me'}</span>
-    </button>
   )
 }
 
