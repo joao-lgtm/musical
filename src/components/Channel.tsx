@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react'
 import type { CSSProperties } from 'react'
 import type { TrackState } from '../audio/types'
-import { readFrame, useEngine, useFrame } from '../hooks/useEngine'
+import { readFrame, useEngine, useEngineState, useFrame } from '../hooks/useEngine'
 import { Fader } from './Fader'
 import { MuteIcon, RecIcon, TrashIcon, UndoIcon } from './Icons'
 import { Knob } from './Knob'
@@ -26,6 +26,11 @@ const STATUS = { empty: 'Vazia', armed: 'Armada', recording: 'Gravando', recorde
 
 export function Channel({ index, track, transportPlaying, studio, hint, dimmed, collapsible }: Props) {
   const engine = useEngine()
+  const { mic, micTrack } = useEngineState(engine)
+  const requesting = mic === 'requesting' && micTrack === index
+  const unavailable = mic === 'denied' || mic === 'missing'
+  const micFailed = unavailable && micTrack === index
+  const blocked = unavailable && micTrack !== null && micTrack !== index
   const n = index + 1
   const { status, muted, solo, overdubbing } = track
   const rec = status === 'armed' || status === 'recording'
@@ -59,7 +64,7 @@ export function Channel({ index, track, transportPlaying, studio, hint, dimmed, 
     if (txt !== lastText.current) armText.current.textContent = lastText.current = txt
   })
 
-  const recLabel = rec ? 'Cancelar' : status === 'recorded' ? (overdubbing ? 'Overdub' : 'Regravar') : 'Gravar'
+  const recLabel = requesting ? 'Pedindo microfone…' : micFailed ? 'Tentar de novo' : rec ? 'Cancelar' : status === 'recorded' ? (overdubbing ? 'Overdub' : 'Regravar') : 'Gravar'
   const statusText = status === 'recorded' && !transportPlaying ? 'Pronta' : STATUS[status]
 
   return (
@@ -69,7 +74,7 @@ export function Channel({ index, track, transportPlaying, studio, hint, dimmed, 
       data-status={status}
       data-muted={muted || undefined}
       data-dim={dimmed || undefined}
-      data-collapsible={collapsible || undefined}
+      data-collapsible={(collapsible && !micFailed) || undefined}
       style={{ '--ch': `var(--ch${n})`, '--ch-lit': `var(--ch${n}-lit)` } as CSSProperties}
       aria-labelledby={`ch${n}-name`}
     >
@@ -94,17 +99,30 @@ export function Channel({ index, track, transportPlaying, studio, hint, dimmed, 
 
       <button
         className="rec"
+        data-requesting={requesting || undefined}
+        aria-busy={requesting || undefined}
+        disabled={blocked}
+        title={blocked ? 'Microfone indisponível' : undefined}
+        aria-describedby={blocked ? `ch${n}-mic-unavailable` : micFailed ? `ch${n}-mic-error` : undefined}
         data-hint={hint || undefined}
         aria-pressed={rec}
         onClick={() => engine.record(index)}
         aria-label={`${rec ? 'Cancelar gravação' : recLabel}, faixa ${n}${status === 'recorded' && !overdubbing ? ' (apaga o take atual)' : ''}`}
         aria-keyshortcuts={String(n)}
       >
-        <span className="rec__dot"><RecIcon size={18} /></span>
+        <span className="rec__dot">{requesting ? <span className="mic-spinner" aria-hidden="true" /> : <RecIcon size={18} />}</span>
         <span className="rec__text">{recLabel}</span>
         <kbd className="rec__key">{n}</kbd>
       </button>
 
+      {blocked && <span id={`ch${n}-mic-unavailable`} className="sr-only">Microfone indisponível</span>}
+      {micFailed && (
+        <p id={`ch${n}-mic-error`} className="strip__mic-error" role="alert">
+          {mic === 'denied'
+            ? 'Microfone bloqueado. Libere no cadeado ao lado do endereço e toque em Tentar de novo.'
+            : 'Nenhum microfone disponível. Conecte um ou feche outros apps que o usam.'}
+        </p>
+      )}
       {studio && (
         <div className="seg seg--mode" role="group" aria-label={`Modo de gravação, faixa ${n}`}>
           <button className="seg__btn" aria-pressed={!overdubbing} onClick={() => engine.setTrack(index, { overdubbing: false })} title="Gravar apaga o take anterior" aria-label="Substituir">

@@ -5,6 +5,11 @@ import { surprise } from './drumPresets'
 import { DiceIcon } from './Icons'
 import type { EngineState } from '../audio/types'
 
+const MIC_TIP_KEY = 'loopstudio.micTipShown'
+const micTipShown = () => {
+  try { return localStorage.getItem(MIC_TIP_KEY) === '1' } catch { return false }
+}
+
 const CAL_KEY = 'loopstudio.calOffered'
 const calOffered = () => {
   try {
@@ -22,6 +27,9 @@ export function GuideBar({ state, onCalibrate }: { state: EngineState; onCalibra
   const pendingFocus = useRef({ wasInside: false, target: 0 })
   const lastPreset = useRef<string | undefined>(undefined)
   const [offered, setOffered] = useState(calOffered)
+  const tipEligible = useRef(!micTipShown())
+  const tipActive = useRef(false)
+  const [showTip, setShowTip] = useState(false)
   const mics = state.tracks.slice(0, -1)
   const layers = mics.filter((t) => t.status === 'recorded').length
   const recording = mics.findIndex((t) => t.status === 'recording')
@@ -35,19 +43,37 @@ export function GuideBar({ state, onCalibrate }: { state: EngineState; onCalibra
   let action = () => {}
   const active = recording >= 0 ? recording : armed
   const silentWarning = silent >= 0 && active < 0
-  if (active >= 0) {
+  const micUnavailable = (state.mic === 'denied' || state.mic === 'missing') && active < 0 && state.micTrack === null
+  useEffect(() => {
+    if (state.mic === 'ready' && tipEligible.current) {
+      tipEligible.current = false
+      setShowTip(true)
+    }
+    if (active >= 0) tipActive.current = true
+    else if (tipActive.current) setShowTip(false)
+  }, [state.mic, active])
+
+  if (silentWarning) {
+    msg = <>Não ouvimos nada na faixa {silent + 1}. Confira se o microfone está ligado e perto de você.</>
+    label = 'Gravar de novo'
+    action = () => engine.record(silent)
+  } else if (micUnavailable) {
+    msg = state.mic === 'denied'
+      ? <>Microfone bloqueado. Libere no cadeado ao lado do endereço.</>
+      : <>Microfone desconectado ou indisponível.</>
+    label = 'Tentar de novo'
+    action = () => { void engine.ensureMic() }
+  } else if (state.mic === 'requesting') {
+    msg = <>Permita o microfone na janela do navegador.</>
+  } else if (active >= 0) {
     msg = recording >= 0
       ? <>Gravando a faixa {active + 1}. O loop fecha sozinho no fim.</>
       : <>Faixa {active + 1} armada: a gravação começa no tempo 1.</>
     label = 'Cancelar'
     action = () => engine.record(active)
-  } else if (silentWarning) {
-    msg = <>Não ouvimos nada na faixa {silent + 1}. Confira se o microfone está ligado e perto de você.</>
-    label = 'Gravar de novo'
-    action = () => engine.record(silent)
   } else if (layers === 0) {
-    msg = <>Aperte <kbd>1</kbd> e cante, bata palmas ou bata na mesa.</>
-    touchMsg = <>Toque em Gravar e cante, bata palmas ou bata na mesa.</>
+    msg = <>A batida está rolando. Aperte <kbd>1</kbd> e cante, bata palmas ou bata na mesa.</>
+    touchMsg = <>A batida está rolando. Toque em Gravar na faixa 1 e cante, bata palmas ou bata na mesa.</>
     label = 'Gravar faixa 1'
     action = () => engine.record(0)
   } else if (layers === 1 && free) {
@@ -84,7 +110,7 @@ export function GuideBar({ state, onCalibrate }: { state: EngineState; onCalibra
   })
 
   if (!msg) return null
-  const offerCal = !silentWarning && layers === 1 && recording < 0 && armed < 0 && !offered
+  const offerCal = !micUnavailable && state.mic !== 'requesting' && !silentWarning && layers === 1 && recording < 0 && armed < 0 && !offered
   function calibrate() {
     setOffered(true)
     try {
@@ -95,14 +121,17 @@ export function GuideBar({ state, onCalibrate }: { state: EngineState; onCalibra
     onCalibrate()
   }
   return (
-    <div ref={guide} className={silentWarning ? 'guide guide--warning' : 'guide'}>
+    <div ref={guide} className={silentWarning || micUnavailable ? 'guide guide--warning' : 'guide'}>
       <span className="guide__dot" aria-hidden="true" />
       <p role="status">
         {touchMsg ? <><span className="guide__desktop">{msg}</span><span className="guide__touch">{touchMsg}</span></> : msg}
       </p>
-      <button type="button" className="btn guide__action" onClick={action} disabled={state.status !== 'ready'}>
+      {label && <button type="button" className="btn guide__action" onClick={action} disabled={state.status !== 'ready'}>
         {label}
-      </button>
+      </button>}
+      {showTip && state.mic === 'ready' && active >= 0 && !silentWarning && (
+        <InputTip />
+      )}
       {offerCal && (
         <button className="guide__cal" onClick={calibrate}>
           Ficou desalinhado? Calibrar em 10 s
@@ -133,5 +162,37 @@ export function SurpriseButton() {
       <DiceIcon size={16} />
       <span aria-live="polite">{picked ? `Bateria: ${picked}` : 'Surpreenda-me'}</span>
     </button>
+  )
+}
+
+function InputTip() {
+  const engine = useEngine()
+  const bar = useRef<HTMLSpanElement>(null)
+  const [inputStatus, setInputStatus] = useState('Testando o microfone…')
+  useEffect(() => {
+    try { localStorage.setItem(MIC_TIP_KEY, '1') } catch { /* sem persistência */ }
+    let heard = false
+    let frame = 0
+    let lowSince: number | null = null
+    function update(now: number) {
+      const level = Math.max(0, Math.min(1, engine.getInputLevel()))
+      if (bar.current) bar.current.style.transform = `scaleX(${level})`
+      if (level > 0.05) heard = true
+      if (level < 0.05) lowSince ??= now
+      else lowSince = null
+      setInputStatus(lowSince !== null && now - lowSince >= 2000
+        ? 'Não estamos ouvindo nada. Confira o microfone.'
+        : heard ? 'Estamos te ouvindo' : 'Testando o microfone…')
+      frame = requestAnimationFrame(update)
+    }
+    frame = requestAnimationFrame(update)
+    return () => cancelAnimationFrame(frame)
+  }, [engine])
+  return (
+    <div className="guide__input">
+      <span className="guide__meter" aria-hidden="true"><span ref={bar} /></span>
+      <span role="status">{inputStatus}</span>
+      <p>Use fones: o som das caixas pode vazar na gravação.</p>
+    </div>
   )
 }

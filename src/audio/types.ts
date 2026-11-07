@@ -53,12 +53,24 @@ export const STEPS_PER_BAR = 16
 export type EngineStatus = 'idle' | 'initializing' | 'ready' | 'error' | 'disposed'
 
 /**
+ * off: ainda não pedido. requesting: aguardando a permissão do navegador. ready: capturando.
+ * denied: permissão negada (NotAllowedError). missing: sem dispositivo, ocupado ou desconectado.
+ * Erro de microfone NÃO muda EngineStatus: bateria, sequenciador e play continuam funcionando.
+ */
+export type MicStatus = 'off' | 'requesting' | 'ready' | 'denied' | 'missing'
+
+/**
  * Snapshot imutável: o mesmo objeto é retornado por getState até haver mudança,
  * e cada mudança gera um objeto novo (requisito de useSyncExternalStore).
  */
 export interface EngineState {
   readonly status: EngineStatus
   readonly error: string | null
+  readonly mic: MicStatus
+  /** Mensagem técnica do último erro de microfone; a UI escolhe o texto pelo valor de `mic`. */
+  readonly micError: string | null
+  /** Canal mic que pediu o microfone e será armado quando ele for concedido; mantido em denied/missing para o erro inline. null sem pedido pendente. */
+  readonly micTrack: number | null
   readonly bpm: number // 60..180
   readonly bars: 1 | 2 | 4
   readonly metronome: boolean
@@ -98,8 +110,10 @@ export interface ProjectData {
 
 /** Comandos chamados com status diferente de 'ready' são ignorados (exceto init/dispose). */
 export interface LoopEngine {
-  /** Cria AudioContext e pede o microfone. Chamar num gesto do usuário. Idempotente: chamadas concorrentes recebem a mesma Promise. Rejeita e põe status 'error' em falha. */
+  /** Cria AudioContext, mix, bateria e scheduler, SEM microfone. Chamar num gesto do usuário. Idempotente: chamadas concorrentes recebem a mesma Promise. Rejeita e põe status 'error' em falha. */
   init(): Promise<void>
+  /** Pede o microfone (chamar num gesto do usuário). Idempotente: chamadas concorrentes recebem a mesma Promise. Resolve true se mic === 'ready'; nunca rejeita. */
+  ensureMic(): Promise<boolean>
   /** Para tudo, fecha AudioContext e libera o microfone. Status vira 'disposed'. */
   dispose(): void
   /** Retorna false se já houver canal mic não vazio (BPM/compassos travam). O padrão de bateria não trava. */
@@ -119,7 +133,11 @@ export interface LoopEngine {
   setMasterVolume(volume: number): void
   play(): void
   stop(): void
-  /** Arma o canal mic (substitui ou overdub conforme `overdubbing`); chamar de novo enquanto armado/gravando cancela. Ignorado no canal drums. */
+  /**
+   * Arma o canal mic (substitui ou overdub conforme `overdubbing`); chamar de novo enquanto armado/gravando cancela. Ignorado no canal drums.
+   * Sem microfone (mic !== 'ready'): guarda micTrack, chama ensureMic e só arma após a permissão (antes, o take sairia vazio).
+   * Chamar de novo durante 'requesting' cancela a intenção; em denied/missing, tenta de novo.
+   */
   record(track: number): void
   /** Canal mic: apaga o take. Canal drums: limpa o padrão. */
   clear(track: number): void
@@ -139,6 +157,8 @@ export interface LoopEngine {
   getArmedIn(track: number): number | null
   /** Nível atual 0..1 já em escala de meter (pico em dB, -48..0 dB → 0..1) por canal (tracks.length valores) + master no fim, para VU meters. */
   getLevels(): Float32Array
+  /** Nível de entrada do microfone 0..1, na mesma escala de getLevels; 0 se mic !== 'ready'. Para rAF. */
+  getInputLevel(): number
   /** Mixagem final em tempo real, para gravar vídeo com áudio (MediaRecorder). */
   getOutputStream(): MediaStream | null
   /** Renderiza `loops` repetições do loop com a mixagem atual (inclui FX e bateria; sem metrônomo). */
