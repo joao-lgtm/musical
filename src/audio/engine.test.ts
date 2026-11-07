@@ -69,7 +69,8 @@ class TestContext {
   createConvolver = audioNode
   createAnalyser = audioNode
   createOscillator = audioNode
-  createBufferSource = audioNode
+  bufferSources: ReturnType<typeof audioNode>[] = []
+  createBufferSource() { const node = audioNode(); this.bufferSources.push(node); return node }
   createBuffer(channels: number, length: number, sampleRate: number) {
     return new TestBuffer({ numberOfChannels: channels, length, sampleRate })
   }
@@ -373,6 +374,118 @@ describe('audio sem permissao de microfone', () => {
     master.linearRampToValueAtTime.mockClear()
     engine.play()
     expect(master.linearRampToValueAtTime).not.toHaveBeenCalled()
+  })
+
+  describe('audio do take', () => {
+    it('retorna copias independentes e o sampleRate original do buffer', async () => {
+      await engine.init()
+      const project = engine.exportProject()
+      project.sampleRate = 48000
+      project.tracks[0].audio = Float32Array.of(0.2, 0.4)
+      engine.importProject(project)
+      const first = engine.getTakeAudio(0)!
+      expect(first.sampleRate).toBe(48000)
+      first.samples[0] = 9
+      expect(engine.getTakeAudio(0)!.samples[0]).toBeCloseTo(0.2)
+      expect(engine.getTakeAudio(0)!.samples).not.toBe(first.samples)
+      expect(engine.getTakeAudio(1)).toBeNull()
+      expect(engine.getTakeAudio(2)).toBeNull()
+      expect(engine.getTakeAudio(-1)).toBeNull()
+    })
+
+    it('completa com zeros e corta sem esticar o audio, preservando a copia de entrada', async () => {
+      await engine.init()
+      const length = Math.ceil(engine.getState().loopDuration * 100)
+      const samples = Float32Array.of(0.2, 0.4)
+      engine.applyTake(0, samples)
+      samples[0] = 9
+      const first = engine.getTakeAudio(0)!
+      expect(first.sampleRate).toBe(100)
+      expect(first.samples.length).toBe(length)
+      expect(Array.from(first.samples.slice(0, 4))).toEqual(Array.from(Float32Array.of(0.2, 0.4, 0, 0)))
+      engine.applyTake(0, new Float32Array(length + 10).fill(0.5))
+      expect(engine.getTakeAudio(0)!.samples).toEqual(new Float32Array(length).fill(0.5))
+    })
+
+    it('reamostra pela taxa antes de completar o restante com zeros', async () => {
+      await engine.init()
+      engine.applyTake(0, Float32Array.of(0, 1), { sampleRate: 50 })
+      expect(Array.from(engine.getTakeAudio(0)!.samples.slice(0, 6))).toEqual([0, 0.5, 1, 1, 0, 0])
+      engine.applyTake(0, Float32Array.of(0, 0.25, 0.5, 0.75, 1), { sampleRate: 200 })
+      expect(Array.from(engine.getTakeAudio(0)!.samples.slice(0, 5))).toEqual([0, 0.5, 1, 0, 0])
+    })
+
+    it('undo restaura audio e source anteriores inclusive faixa vazia', async () => {
+      await engine.init()
+      engine.applyTake(0, Float32Array.of(0.2), { source: 'ocarina' })
+      engine.undo(0)
+      expect(engine.getState().tracks[0]).toMatchObject({ source: 'mic', status: 'empty', canUndo: false })
+      expect(engine.getTakeAudio(0)).toBeNull()
+      engine.applyTake(0, Float32Array.of(0.3))
+      const previous = engine.getTakeAudio(0)!
+      const revision = engine.getState().tracks[0].revision
+      engine.applyTake(0, Float32Array.of(0.7), { source: 'ocarina' })
+      expect(engine.getState().tracks[0]).toMatchObject({ source: 'ocarina', silentTake: false, canUndo: true, revision: revision + 1 })
+      engine.undo(0)
+      expect(engine.getTakeAudio(0)).toEqual(previous)
+      expect(engine.getState().tracks[0].source).toBe('mic')
+    })
+
+    it('clear substitui o snapshot de source e audio corretamente', async () => {
+      await engine.init()
+      engine.applyTake(0, Float32Array.of(0.2), { source: 'ocarina' })
+      const previous = engine.getTakeAudio(0)
+      engine.clear(0)
+      engine.setTrack(0, { source: 'mic' })
+      engine.undo(0)
+      expect(engine.getTakeAudio(0)).toEqual(previous)
+      expect(engine.getState().tracks[0].source).toBe('ocarina')
+    })
+
+    it('reinicia a fonte em fase quando o transporte esta tocando', async () => {
+      await engine.init()
+      engine.setMetronome(false)
+      engine.play()
+      const ctx = TestContext.instances[0]
+      ctx.currentTime = 0.5
+      engine.applyTake(0, Float32Array.of(0.2))
+      const source = ctx.bufferSources.at(-1)!
+      expect(source.start.mock.calls[0][0]).toBeCloseTo(0.52)
+      expect(source.start.mock.calls[0][1]).toBeCloseTo(0.47)
+      expect(engine.getState().playing).toBe(true)
+    })
+
+    it('ignora apply e leitura de take em armed/recording e no drums', async () => {
+      await engine.init()
+      engine.setTrack(0, { source: 'ocarina' })
+      engine.record(0)
+      const armed = engine.getState()
+      engine.applyTake(0, Float32Array.of(1), { source: 'mic' })
+      expect(engine.getState()).toBe(armed)
+      expect(engine.getTakeAudio(0)).toBeNull()
+      TestContext.instances[0].currentTime = 3
+      vi.advanceTimersByTime(25)
+      expect(engine.getState().tracks[0].status).toBe('recording')
+      const recording = engine.getState()
+      engine.applyTake(0, Float32Array.of(1))
+      engine.applyTake(2, Float32Array.of(1))
+      expect(engine.getState()).toBe(recording)
+      expect(engine.getTakeAudio(0)).toBeNull()
+    })
+
+    it('ignora durante calibracao', async () => {
+      await engine.init()
+      getUserMedia.mockResolvedValue(micStream().stream)
+      const calibration = engine.calibrateLatency({ clicks: 2 })
+      await engine.ensureMic()
+      await Promise.resolve()
+      const previous = engine.getState()
+      engine.applyTake(0, Float32Array.of(1))
+      expect(engine.getState()).toBe(previous)
+      expect(engine.getTakeAudio(0)).toBeNull()
+      await vi.runAllTimersAsync()
+      expect(await calibration).toBeNull()
+    })
   })
 
   describe('ocarina', () => {

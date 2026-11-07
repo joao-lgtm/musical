@@ -32,6 +32,17 @@ export function GuideBar({ state, onCalibrate }: { state: EngineState; onCalibra
   const tipEligible = useRef(!micTipShown())
   const tipActive = useRef(false)
   const [showTip, setShowTip] = useState(false)
+  const previousTakes = useRef(state.tracks.map((t) => t.status))
+  const [transformTip, setTransformTip] = useState(false)
+  const transformTipSeen = useRef(false)
+  useEffect(() => {
+    if (!transformTipSeen.current && state.tracks.some((t, i) => t.kind === 'mic' && t.source === 'mic' &&
+        t.status === 'recorded' && previousTakes.current[i] === 'recording')) {
+      transformTipSeen.current = true
+      setTransformTip(true)
+    }
+    previousTakes.current = state.tracks.map((t) => t.status)
+  }, [state.tracks])
   const mics = state.tracks.slice(0, -1)
   const layers = mics.filter((t) => t.status === 'recorded').length
   const recording = mics.findIndex((t) => t.status === 'recording')
@@ -129,7 +140,7 @@ export function GuideBar({ state, onCalibrate }: { state: EngineState; onCalibra
   })
 
   const suggestOcarina = layers === 0 || state.mic === 'denied' || state.mic === 'missing'
-  if (!msg && !suggestOcarina) return null
+  if (!msg && !suggestOcarina && !transformTip) return null
   const offerCal = mics.some((track) => track.status === 'recorded' && track.source === 'mic') && !micUnavailable && state.mic !== 'requesting' && !silentWarning && layers === 1 && recording < 0 && armed < 0 && !offered
   function calibrate() {
     setOffered(true)
@@ -151,6 +162,7 @@ export function GuideBar({ state, onCalibrate }: { state: EngineState; onCalibra
         {label}
       </button>}
       {showingExport && <button type="button" className="btn btn--ghost guide__dismiss" disabled={exportCard.busy} onClick={exportCard.dismiss}>Agora não</button>}
+      {transformTip && <p className="guide__secondary">Cantou uma melodia? Experimente Transformar → Em ocarina. Dica: cante uma nota de cada vez, tipo “du du du”.</p>}
       {suggestOcarina && <p className="guide__secondary">Sem microfone? Troque a faixa para Ocarina e toque os pads.</p>}
       {showTip && mics[active]?.source === 'mic' && state.mic === 'ready' && active >= 0 && !silentWarning && (
         <InputTip />

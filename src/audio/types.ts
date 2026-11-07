@@ -177,6 +177,14 @@ export interface LoopEngine {
   /** Leitura barata, para requestAnimationFrame. */
   getPosition(): Position
   getPeaks(track: number, n: number): Float32Array | null
+  /** Cópia mono do take do canal mic (para transcrever/detectar offline); null se vazio, armado ou gravando. */
+  getTakeAudio(track: number): { samples: Float32Array; sampleRate: number } | null
+  /**
+   * Substitui o take do canal mic por áudio gerado (ex.: voz → ocarina), ajustado ao comprimento do loop (corta ou completa com silêncio).
+   * Desfazível como uma regravação (undo restaura o take e o source anteriores). Opcionalmente troca o source do canal.
+   * Ignorado em canal armado/gravando, durante a calibração ou no canal drums.
+   */
+  applyTake(track: number, samples: Float32Array, opts?: { sampleRate?: number; source?: TrackSource }): void
   /** Segundos (no relógio ouvido) até a gravação do canal armado começar de fato; null se não armado. Para rAF. */
   getArmedIn(track: number): number | null
   /** Nível atual 0..1 já em escala de meter (pico em dB, -48..0 dB → 0..1) por canal (tracks.length valores) + master no fim, para VU meters. */

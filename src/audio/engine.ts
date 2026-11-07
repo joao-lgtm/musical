@@ -32,13 +32,18 @@ import { renderNotes, startVoice, type Note, type Voice } from './synth'
 import { detectOnsets, estimateLatency } from './calibrate'
 import workletUrl from './recorder.worklet.ts?worker&url'
 
+interface TakeSnapshot {
+  buffer: AudioBuffer | null
+  source: TrackSource
+}
+
 interface Rec {
   start: number // instante agendado (relógio do ctx)
   startFrame: number // frame do mic correspondente, já com latência
   data: Float32Array
   filled: number // amostras capturadas a partir de startFrame
   overdub: boolean
-  previousUndo: AudioBuffer | null | undefined
+  previousUndo: TakeSnapshot | undefined
   source: TrackSource
   notes: Note[]
   held: Map<number, Note>
@@ -232,8 +237,9 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
   let nextStep = 0
   const skippedSteps = new Map<string, number>()
   let timer: ReturnType<typeof setInterval> | undefined
-  // undo de 1 nível: take anterior (null = vazio; undefined = sem undo) e padrão anterior
-  const undoTake: (AudioBuffer | null | undefined)[] = Array(N).fill(undefined)
+  // undo de 1 nível: take/source anteriores (buffer null = vazio; undefined = sem undo) e padrão anterior
+  const undoTake: (TakeSnapshot | undefined)[] = Array(N).fill(undefined)
+  const takeSnapshot = (i: number): TakeSnapshot => ({ buffer: buffers[i], source: state.tracks[i].source })
   let undoPattern: boolean[][] | null = null
   let lastToggle = 0
   let calib: Calib | null = null
@@ -530,7 +536,7 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
     const old = buffers[i]
     if (isSilent(r.data)) {
       if (!r.overdub) {
-        buffers[i] = undoTake[i] ?? null
+        buffers[i] = undoTake[i]?.buffer ?? null
         undoTake[i] = r.previousUndo
         peaks[i] = null
         startSource(i, c.currentTime + 0.02)
@@ -555,7 +561,7 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
       buf = c.createBuffer(1, r.data.length, c.sampleRate)
       buf.copyToChannel(r.data as Float32Array<ArrayBuffer>, 0)
     }
-    if (r.overdub) undoTake[i] = old // o substituir já guardou ao armar
+    if (r.overdub) undoTake[i] = takeSnapshot(i) // o substituir já guardou ao armar
     buffers[i] = buf
     peaks[i] = null
     recs[i] = null
@@ -803,7 +809,7 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
       recs[i] = null
       syncWorklet()
     }
-    if (buffers[i]) undoTake[i] = buffers[i]
+    if (buffers[i]) undoTake[i] = takeSnapshot(i)
     dropTrack(i)
     patchTrack(i, { status: 'empty', canUndo: undoTake[i] !== undefined, silentTake: false, revision: rev(i) })
   }
@@ -824,11 +830,12 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
       return
     }
     undoTake[i] = undefined
-    buffers[i] = snap
+    if (snap.source !== state.tracks[i].source) stopLive(i)
+    buffers[i] = snap.buffer
     peaks[i] = null
     if (state.playing && ctx) startSource(i, ctx.currentTime + 0.02)
     else stopSource(i)
-    patchTrack(i, { status: snap ? 'recorded' : 'empty', canUndo: false, silentTake: false, revision: rev(i) })
+    patchTrack(i, { status: snap.buffer ? 'recorded' : 'empty', source: snap.source, canUndo: false, silentTake: false, revision: rev(i) })
   }
 
   async function calibrate(opts: { clicks?: number; onClick?: (i: number) => void } = {}): Promise<CalibrationResult | null> {
@@ -889,7 +896,7 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
     const previousUndo = undoTake[i]
     const overdub = state.tracks[i].overdubbing && !!buffers[i]
     if (!overdub) {
-      undoTake[i] = buffers[i] // substituir descarta o take ao armar (evita vazar no microfone)
+      undoTake[i] = takeSnapshot(i) // substituir descarta o take ao armar (evita vazar no microfone)
       dropTrack(i)
     }
     if (!state.playing) startTransport(true)
@@ -977,7 +984,7 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
       stopAll()
       if (hasSteps(state.pattern)) savePattern(false)
       for (let i = 0; i < N; i++) {
-        if (buffers[i]) undoTake[i] = buffers[i]
+        if (buffers[i]) undoTake[i] = takeSnapshot(i)
         dropTrack(i)
       }
       set({
@@ -1034,6 +1041,41 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
       if (!ready() || !DRUM_VOICES.includes(voice)) return
       void resume()
       playDrum(ctx!, mix!.ch[D].input, voice, ctx!.currentTime)
+    },
+
+    getTakeAudio(i) {
+      if (!Number.isInteger(i) || i < 0 || i >= n || state.tracks[i].status !== 'recorded') return null
+      const buffer = buffers[i]
+      return buffer ? { samples: buffer.getChannelData(0).slice(), sampleRate: buffer.sampleRate } : null
+    },
+
+    applyTake(i, samples, opts = {}) {
+      if (!valid(i) || i === D || busy() || recs[i] ||
+        state.tracks[i].status === 'armed' || state.tracks[i].status === 'recording') return
+      const c = ctx!
+      const sampleRate = opts.sampleRate ?? c.sampleRate
+      if (!Number.isFinite(sampleRate) || sampleRate <= 0) return
+      const buffer = c.createBuffer(1, Math.ceil(state.loopDuration * c.sampleRate), c.sampleRate)
+      const data = buffer.getChannelData(0)
+      if (sampleRate === c.sampleRate) data.set(samples.subarray(0, data.length))
+      else {
+        const ratio = sampleRate / c.sampleRate
+        for (let j = 0; j < data.length; j++) {
+          const x = j * ratio
+          const k = Math.floor(x)
+          if (k >= samples.length) break
+          const a = samples[k]
+          data[j] = a + ((samples[k + 1] ?? a) - a) * (x - k)
+        }
+      }
+      const source = opts.source === 'mic' || opts.source === 'ocarina' ? opts.source : state.tracks[i].source
+      undoTake[i] = takeSnapshot(i)
+      if (source !== state.tracks[i].source) stopLive(i)
+      if (state.micTrack === i) set({ micTrack: null })
+      buffers[i] = buffer
+      peaks[i] = null
+      if (state.playing) startSource(i, c.currentTime + 0.02)
+      patchTrack(i, { source, status: 'recorded', canUndo: true, silentTake: false, revision: rev(i) })
     },
 
     getArmedIn(i) {

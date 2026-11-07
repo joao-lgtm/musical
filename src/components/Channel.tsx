@@ -5,6 +5,7 @@ import { readFrame, useEngine, useEngineState, useFrame } from '../hooks/useEngi
 import { Fader } from './Fader'
 import { MuteIcon, RecIcon, TrashIcon, UndoIcon } from './Icons'
 import { Knob } from './Knob'
+import { TransformMenu } from './TransformMenu'
 import { TrackName } from './TrackName'
 import { VuMeter } from './VuMeter'
 import { Waveform } from './Waveform'
@@ -121,6 +122,7 @@ export function Channel({ index, track, transportPlaying, studio, hint, dimmed, 
         <kbd className="rec__key">{n}</kbd>
       </button>
 
+      <TransformMenu track={index} />
       {blocked && <span id={`ch${n}-mic-unavailable`} className="sr-only">Microfone indisponível</span>}
       {micFailed && (
         <p id={`ch${n}-mic-error`} className="strip__mic-error" role="alert">
