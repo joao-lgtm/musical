@@ -691,3 +691,12 @@ input[type='range']::-moz-range-thumb { width: 16px; height: 24px; border: 0; bo
 .start__draft { min-height: 21px; color: var(--ink-2); font-size: 0.875rem; }
 .start__fresh { min-height: 44px; }
 .start__fresh .btn { min-height: 44px; width: 100%; }
+
+/* Transformações do take */
+.transform { position: relative; min-width: 0; }
+.transform__trigger { width: 100%; min-height: 44px; }
+.transform__panel { display: grid; gap: 4px; margin-top: 6px; padding: 6px; border: 1px solid var(--line-2); border-radius: 8px; background: var(--panel); }
+.transform__panel button { min-height: 44px; padding: 8px; border: 0; border-radius: 5px; background: var(--panel-hi); color: var(--ink); text-align: left; font-size: 0.875rem; cursor: pointer; }
+.transform__panel button:disabled { opacity: 0.45; cursor: not-allowed; }
+.transform__status { font-size: 0.875rem; color: var(--ink); overflow-wrap: anywhere; }
+.transform__status:not(:empty) { margin-top: 8px; }
