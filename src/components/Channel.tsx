@@ -7,12 +7,13 @@ import { readFrame, useEngine, useEngineState, useFrame } from '../hooks/useEngi
 import { Fader } from './Fader'
 import { MuteIcon, RecIcon, TrashIcon, UndoIcon } from './Icons'
 import { Knob } from './Knob'
+import { NoteGrid, OPEN_GRID_EVENT } from './NoteGrid'
 import { BatchActions } from './BatchActions'
 import { TransformMenu } from './TransformMenu'
 import { TrackName } from './TrackName'
 import { VuMeter } from './VuMeter'
 import { Waveform } from './Waveform'
-import { NotePads, rememberInstrument } from './NotePads'
+import { NotePads, getCoachGuidance, rememberInstrument } from './NotePads'
 import { FX_KNOBS } from './fx'
 
 type Props = {
@@ -35,6 +36,19 @@ export function Channel({ index, track, transportPlaying, studio, hint, dimmed, 
   useEffect(() => { if (isInstrument(track.source)) setLastInstrument(track.source) }, [track.source])
   const engineState = useEngineState(engine)
   const { mic, micTrack } = engineState
+  const [gridMode, setGridMode] = useState(() => !studio && track.status === 'empty')
+  const [gridTip, setGridTip] = useState(false)
+  useEffect(() => {
+    const receive = (event: Event) => {
+      const detail = (event as CustomEvent<{ engine: typeof engine; track: number }>).detail
+      if (detail.engine === engine && detail.track === index) { setGridMode(true); setGridTip(true) }
+    }
+    const coach = () => { if (getCoachGuidance(engine)?.track === index) setGridMode(false) }
+    window.addEventListener('loopstudio:coach-notes', coach)
+    window.addEventListener(OPEN_GRID_EVENT, receive)
+    return () => { window.removeEventListener(OPEN_GRID_EVENT, receive); window.removeEventListener('loopstudio:coach-notes', coach) }
+  }, [engine, index])
+  const gridAvailable = isInstrument(track.source) && (track.status === 'empty' || track.notes !== null)
   const anyRecording = engineState.tracks.some((t) => t.status === 'armed' || t.status === 'recording')
   const requesting = track.source === 'mic' && mic === 'requesting' && micTrack === index
   const unavailable = track.source === 'mic' && (mic === 'denied' || mic === 'missing')
@@ -105,7 +119,17 @@ export function Channel({ index, track, transportPlaying, studio, hint, dimmed, 
         </select>
         {track.source === 'mic' && <small>Último instrumento: {INSTRUMENT_LABEL[lastInstrument]}</small>}
       </label>
-      {isInstrument(track.source) && <NotePads key={`${index}:${track.source}`} track={index} />}
+      {isInstrument(track.source) && <div className="seg seg--pad-mode" role="group" aria-label={`Pads da faixa ${n}`}>
+        <button className="seg__btn" aria-pressed={track.padMode !== 'chords'} onClick={() => engine.setTrack(index, { padMode: 'notes' })}>Notas</button>
+        <button className="seg__btn" aria-pressed={track.padMode === 'chords'} onClick={() => engine.setTrack(index, { padMode: 'chords' })}>Acordes</button>
+      </div>}
+      {gridAvailable && <div className="seg seg--edit" role="group" aria-label={`Como tocar, faixa ${n}`}>
+        <button className="seg__btn" aria-pressed={!gridMode} onClick={() => { setGridMode(false); setGridTip(false) }}>Tocar ao vivo</button>
+        <button className="seg__btn" aria-pressed={gridMode} onClick={() => setGridMode(true)}>Montar na grade</button>
+      </div>}
+      {gridTip && gridAvailable && gridMode && <p className="note-grid__help" role="status">Corrija alguma nota se quiser.</p>}
+      {gridAvailable && gridMode ? <NoteGrid key={`${index}:${track.source}:${track.padMode}`} track={index} />
+        : isInstrument(track.source) && <NotePads key={`${index}:${track.source}:${track.padMode}`} track={index} />}
       <div className="screen">
         <Waveform track={index} status={status} muted={muted} revision={track.revision} />
         {status === 'empty' && <span className="screen__hint">Vazia</span>}

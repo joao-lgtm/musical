@@ -1,5 +1,5 @@
-import type { CalibrationResult, DrumVoice, EngineState, Instrument, LoopEngine, Position, ProjectData, TrackParams, TrackSource, TrackState } from './types'
-import { DRUM_VOICES, INSTRUMENTS, INSTRUMENT_OCTAVE, isInstrument, KEYS, PAD_COUNT, PAD_SCALES, STEPS_PER_BAR } from './types'
+import type { CalibrationResult, DrumVoice, EngineState, GridNote, Instrument, LoopEngine, Position, ProjectData, TrackParams, TrackSource, TrackState } from './types'
+import { CHORD_DEGREES, DRUM_VOICES, INSTRUMENTS, INSTRUMENT_OCTAVE, isInstrument, KEYS, PAD_COUNT, PAD_SCALES, STEPS_PER_BAR } from './types'
 import {
   beatDuration,
   calibrationPlan,
@@ -29,6 +29,7 @@ import { playDrum } from './drums'
 import { fillPattern, humanize, isFillBar } from './groove'
 import { isSilent } from './silence'
 import { padNotes } from './scale'
+import { chordPads } from './harmony'
 import { renderNotes, startVoice, type Note, type Voice } from './synth'
 import { detectOnsets, estimateLatency } from './calibrate'
 import workletUrl from './recorder.worklet.ts?worker&url'
@@ -37,6 +38,7 @@ interface TakeSnapshot {
   buffer: AudioBuffer | null
   source: TrackSource
   reverb: number
+  notes: readonly GridNote[] | null
 }
 
 interface LiveVoice {
@@ -44,6 +46,8 @@ interface LiveVoice {
   degree: number
   midi: number
   forced: boolean
+  group: LiveVoice[]
+  previewTimer?: ReturnType<typeof setTimeout>
 }
 
 interface Rec {
@@ -55,7 +59,7 @@ interface Rec {
   previousUndo: TakeSnapshot | undefined
   source: TrackSource
   notes: Note[]
-  held: Map<number, Note>
+  held: Map<LiveVoice, Note>
   rendering: boolean
 }
 
@@ -184,9 +188,16 @@ function applyMix(mix: Mix, s: EngineState, t: number | null, master = true, mon
   set(mix.delay.delayTime, delayTime(s.bpm))
 }
 
-const pickParams = ({ name, volume, muted, solo, pan, filter, delay, reverb, nudge, overdubbing, source }: TrackState): TrackParams => ({
-  name, volume, muted, solo, pan, filter, delay, reverb, nudge, overdubbing, source,
+const pickParams = ({ name, volume, muted, solo, pan, filter, delay, reverb, nudge, overdubbing, source, padMode }: TrackState): TrackParams => ({
+  name, volume, muted, solo, pan, filter, delay, reverb, nudge, overdubbing, source, padMode,
 })
+
+function gridNotes(input: unknown): GridNote[] | null {
+  if (!Array.isArray(input)) return null
+  return input.filter((note): note is GridNote => note !== null && typeof note === 'object' &&
+    Number.isFinite(note.step) && Number.isFinite(note.length) && note.length > 0 && Number.isFinite(note.midi))
+    .map(({ step, length, midi }) => ({ step, length, midi }))
+}
 
 const validSource = (source: unknown): source is TrackSource =>
   source === 'mic' || INSTRUMENTS.includes(source as Instrument)
@@ -211,6 +222,7 @@ function mergeParams(cur: TrackState, p: Partial<TrackParams>, defaultName: stri
     nudge: mic ? clamp(p.nudge, -100, 100, cur.nudge) : 0,
     overdubbing: mic && p.overdubbing !== undefined ? !!p.overdubbing : cur.overdubbing,
     source,
+    padMode: mic && isInstrument(source) && (p.padMode === 'notes' || p.padMode === 'chords') ? p.padMode : cur.padMode,
   }
 }
 
@@ -246,7 +258,8 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
   const sources: (AudioBufferSourceNode | null)[] = Array(N).fill(null)
   const retiring = Array.from({ length: N }, () => new Set<AudioBufferSourceNode>()) // trocados, ainda soando
   const recs: (Rec | null)[] = Array(N).fill(null)
-  const heldVoices = Array.from({ length: N }, () => new Map<number, LiveVoice>())
+  const noteGeneration: number[] = Array(N).fill(0)
+  const heldVoices = Array.from({ length: N }, () => new Map<number, LiveVoice[]>())
   const sounding = Array.from({ length: N }, () => new Set<LiveVoice>())
   const peaks: ({ count: number; data: Float32Array } | null)[] = Array(N).fill(null)
   const clicks = new Set<OscillatorNode>()
@@ -259,7 +272,7 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
   let timer: ReturnType<typeof setInterval> | undefined
   // undo de 1 nível: take/source anteriores (buffer null = vazio; undefined = sem undo) e padrão anterior
   const undoTake: (TakeSnapshot | undefined)[] = Array(N).fill(undefined)
-  const takeSnapshot = (i: number): TakeSnapshot => ({ buffer: buffers[i], source: state.tracks[i].source, reverb: state.tracks[i].reverb })
+  const takeSnapshot = (i: number): TakeSnapshot => ({ buffer: buffers[i], source: state.tracks[i].source, reverb: state.tracks[i].reverb, notes: state.tracks[i].notes })
   let removedTrack: {
     index: number
     track: TrackState
@@ -277,7 +290,7 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
 
   const defaultName = (i: number) => (i === D ? 'Bateria' : `Faixa ${i + 1}`)
   const blank = (kind: TrackState['kind'], name: string): TrackState => ({
-    kind, name, status: 'empty', volume: 0.8, muted: false, solo: false, pan: 0, filter: 1, delay: 0, reverb: 0, nudge: 0, overdubbing: false, source: 'mic', canUndo: false, silentTake: false, revision: 0,
+    kind, name, status: 'empty', volume: 0.8, muted: false, solo: false, pan: 0, filter: 1, delay: 0, reverb: 0, nudge: 0, overdubbing: false, source: 'mic', padMode: 'notes', notes: null, canUndo: false, silentTake: false, revision: 0,
   })
   let state: EngineState = {
     status: 'idle',
@@ -329,6 +342,13 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
   }
 
   function set(patch: Partial<EngineState>) {
+    if (patch.bpm !== undefined || patch.bars !== undefined || patch.status === 'disposed') {
+      for (let i = 0; i < N; i++) noteGeneration[i]++
+    }
+    patch.tracks?.forEach((track, i) => {
+      if (track.revision !== state.tracks[i].revision || track.source !== state.tracks[i].source ||
+        track.status === 'armed' && state.tracks[i].status !== 'armed') noteGeneration[i]++
+    })
     state = { ...state, ...patch }
     if (patch.tracks || patch.isolateRecording !== undefined) remix()
     listeners.forEach((fn) => fn(state))
@@ -542,7 +562,7 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
     const overdub = recs[i]?.overdub
     recs[i] = null
     syncWorklet()
-    patchTrack(i, { status: overdub ? 'recorded' : 'empty' })
+    patchTrack(i, { status: overdub ? 'recorded' : 'empty', notes: overdub ? state.tracks[i].notes : null })
   }
 
   function onBlock({ frame, data }: { frame: number; data: Float32Array }) {
@@ -552,22 +572,26 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
     if (calib && fillCapture(calib.cap, frame, data)) calib.done()
   }
 
-  function closeNote(i: number, degree: number, end?: number) {
+  function closeNote(i: number, entry: LiveVoice, end?: number) {
     const r = recs[i]
-    const note = r?.held.get(degree)
+    const note = r?.held.get(entry)
     if (!r || !note) return
     const time = end ?? Math.min(state.loopDuration, Math.max(0, heardTime(ctx!.currentTime, outLatency()) - r.start))
     note.duration = Math.max(0, time - note.time)
-    r.held.delete(degree)
+    r.held.delete(entry)
   }
 
   function releaseHeld(i: number, entry: LiveVoice) {
-    if (heldVoices[i].get(entry.degree) !== entry) return
-    heldVoices[i].delete(entry.degree)
-    closeNote(i, entry.degree)
+    const group = heldVoices[i].get(entry.degree)
+    if (!group?.includes(entry)) return
+    const remaining = group.filter(voice => voice !== entry)
+    if (remaining.length) heldVoices[i].set(entry.degree, remaining)
+    else heldVoices[i].delete(entry.degree)
+    closeNote(i, entry)
   }
 
   function cutVoice(i: number, entry: LiveVoice) {
+    clearTimeout(entry.previewTimer)
     if (!entry.forced) {
       entry.forced = true
       entry.voice.stop(ctx!.currentTime, 0.06)
@@ -575,11 +599,45 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
     releaseHeld(i, entry)
   }
 
+  function cutGroup(i: number, group: LiveVoice[]) {
+    for (const entry of group) if (sounding[i].has(entry)) cutVoice(i, entry)
+  }
+
+  function reserveVoices(i: number, count: number) {
+    let active = [...sounding[i]].filter(voice => !voice.forced)
+    while (active.length + count > 4) {
+      cutGroup(i, active[0].group)
+      active = [...sounding[i]].filter(voice => !voice.forced)
+    }
+  }
+
+  function previewNote(i: number, midi: number, duration = 0.25) {
+    if (!valid(i) || i === D || !Number.isInteger(midi) || midi < 0 || midi > 127 ||
+      !Number.isFinite(duration) || duration <= 0) return
+    const source = state.tracks[i].source
+    if (!isInstrument(source)) return
+    void resume()
+    reserveVoices(i, 1)
+    const group: LiveVoice[] = []
+    const entry: LiveVoice = {
+      voice: startVoice(ctx!, mix!.ch[i].input, midi, ctx!.currentTime, source), degree: -1, midi, forced: false, group,
+    }
+    group.push(entry)
+    sounding[i].add(entry)
+    entry.voice.onEnded(() => { clearTimeout(entry.previewTimer); sounding[i].delete(entry) })
+    // Agenda o corte sem bloquear um stop antecipado, inclusive na kalimba.
+    entry.previewTimer = setTimeout(() => {
+      if (sounding[i].has(entry) && !entry.forced) cutVoice(i, entry)
+    }, duration * 1000)
+  }
+
   function stopNote(i: number, degree: number) {
-    const entry = heldVoices[i].get(degree)
-    if (!entry) return
-    entry.voice.stop(ctx!.currentTime)
-    releaseHeld(i, entry)
+    const group = heldVoices[i].get(degree)
+    if (!group) return
+    for (const entry of group) {
+      entry.voice.stop(ctx!.currentTime)
+      releaseHeld(i, entry)
+    }
   }
 
   function stopLive(i: number) {
@@ -592,11 +650,11 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
     const now = heardTime(ctx.currentTime, outLatency())
     if (now < r.start) return
     if (state.tracks[i].status === 'armed') {
-      for (const [degree, voice] of heldVoices[i]) {
+      for (const group of heldVoices[i].values()) for (const voice of group) {
         if (!sounding[i].has(voice) || voice.forced) continue
         const note: Note = { time: 0, duration: 0, midi: voice.midi }
         r.notes.push(note)
-        r.held.set(degree, note)
+        r.held.set(voice, note)
       }
       patchTrack(i, { status: 'recording' })
     }
@@ -617,32 +675,37 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
   }
 
   function noteOn(i: number, degree: number) {
-    if (!valid(i) || i === D || busy() ||
-      !Number.isInteger(degree) || degree < 0 || degree >= PAD_COUNT[state.scale]) return
-    const source = state.tracks[i].source
-    if (!isInstrument(source)) return
+    if (!valid(i) || i === D || busy() || !Number.isInteger(degree) || degree < 0) return
+    const track = state.tracks[i]
+    const source = track.source
+    if (!isInstrument(source) || degree >= (track.padMode === 'chords' ? CHORD_DEGREES.length : PAD_COUNT[state.scale])) return
     void resume()
     updateInstrument(i)
     const previous = heldVoices[i].get(degree)
-    if (previous) cutVoice(i, previous)
-    const active = [...sounding[i]].filter(voice => !voice.forced)
-    if (active.length >= 4) cutVoice(i, active[0])
-    const midi = padNotes(state.key, state.scale, INSTRUMENT_OCTAVE[source])[degree]
-    const entry: LiveVoice = {
-      voice: startVoice(ctx!, mix!.ch[i].input, midi, ctx!.currentTime, source), degree, midi, forced: false,
-    }
-    heldVoices[i].set(degree, entry)
-    sounding[i].add(entry)
-    entry.voice.onEnded(() => {
-      sounding[i].delete(entry)
-      releaseHeld(i, entry)
-    })
+    if (previous) cutGroup(i, previous)
+    const octave = INSTRUMENT_OCTAVE[source]
+    const midis = track.padMode === 'chords' ? chordPads(state.key, octave)[degree].midis : [padNotes(state.key, state.scale, octave)[degree]]
+    reserveVoices(i, midis.length)
+    const group: LiveVoice[] = []
+    heldVoices[i].set(degree, group)
+    const when = ctx!.currentTime
+    const heard = heardTime(when, outLatency())
     const r = recs[i]
-    const heard = heardTime(ctx!.currentTime, outLatency())
-    if (r && isInstrument(r.source) && !r.rendering && heard >= r.start && heard < r.start + state.loopDuration) {
-      const note: Note = { time: (heard - r.start) % state.loopDuration, duration: 0, midi }
-      r.notes.push(note)
-      r.held.set(degree, note)
+    for (const midi of midis) {
+      const entry: LiveVoice = {
+        voice: startVoice(ctx!, mix!.ch[i].input, midi, when, source), degree, midi, forced: false, group,
+      }
+      group.push(entry)
+      sounding[i].add(entry)
+      entry.voice.onEnded(() => {
+        sounding[i].delete(entry)
+        releaseHeld(i, entry)
+      })
+      if (r && isInstrument(r.source) && !r.rendering && heard >= r.start && heard < r.start + state.loopDuration) {
+        const note: Note = { time: (heard - r.start) % state.loopDuration, duration: 0, midi }
+        r.notes.push(note)
+        r.held.set(entry, note)
+      }
     }
   }
 
@@ -656,6 +719,7 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
     const c = ctx!
     const old = buffers[i]
     if (isSilent(r.data)) {
+      const notes = r.overdub ? state.tracks[i].notes : undoTake[i]?.notes ?? null
       if (!r.overdub) {
         buffers[i] = undoTake[i]?.buffer ?? null
         undoTake[i] = r.previousUndo
@@ -668,6 +732,7 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
         status: buffers[i] ? 'recorded' : 'empty',
         canUndo: undoTake[i] !== undefined,
         silentTake: true,
+        notes,
         revision: rev(i),
       })
       return
@@ -682,13 +747,18 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
       buf = c.createBuffer(1, r.data.length, c.sampleRate)
       buf.copyToChannel(r.data as Float32Array<ArrayBuffer>, 0)
     }
+    const sd = stepDuration(state.bpm)
+    const notes = isInstrument(r.source) ? [
+      ...(r.overdub ? state.tracks[i].notes ?? [] : []),
+      ...r.notes.map((note) => ({ step: note.time / sd, length: Math.max(0.09, note.duration) / sd, midi: note.midi })),
+    ] : null
     if (r.overdub) undoTake[i] = takeSnapshot(i) // o substituir já guardou ao armar
     buffers[i] = buf
     peaks[i] = null
     recs[i] = null
     syncWorklet()
     startSource(i, c.currentTime + 0.02)
-    patchTrack(i, { status: 'recorded', canUndo: undoTake[i] !== undefined, silentTake: false, revision: rev(i) })
+    patchTrack(i, { status: 'recorded', notes, canUndo: undoTake[i] !== undefined, silentTake: false, revision: rev(i) })
   }
 
   function dropTrack(i: number) {
@@ -939,7 +1009,7 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
     }
     if (buffers[i]) undoTake[i] = takeSnapshot(i)
     dropTrack(i)
-    patchTrack(i, { status: 'empty', canUndo: undoTake[i] !== undefined, silentTake: false, revision: rev(i) })
+    patchTrack(i, { status: 'empty', notes: null, canUndo: undoTake[i] !== undefined, silentTake: false, revision: rev(i) })
   }
 
   function undo(i: number) {
@@ -963,7 +1033,7 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
     peaks[i] = null
     if (state.playing && ctx) startSource(i, ctx.currentTime + 0.02)
     else stopSource(i)
-    patchTrack(i, { status: snap.buffer ? 'recorded' : 'empty', source: snap.source, reverb: snap.reverb, canUndo: false, silentTake: false, revision: rev(i) })
+    patchTrack(i, { status: snap.buffer ? 'recorded' : 'empty', source: snap.source, reverb: snap.reverb, notes: snap.notes, canUndo: false, silentTake: false, revision: rev(i) })
   }
 
   async function calibrate(opts: { clicks?: number; onClick?: (i: number) => void } = {}): Promise<CalibrationResult | null> {
@@ -1101,7 +1171,49 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
       rendering: false,
     }
     syncWorklet()
-    patchTrack(i, { status: 'armed', silentTake: false, canUndo: undoTake[i] !== undefined, revision: overdub ? state.tracks[i].revision : rev(i) })
+    patchTrack(i, { status: 'armed', notes: overdub ? state.tracks[i].notes : null, silentTake: false, canUndo: undoTake[i] !== undefined, revision: overdub ? state.tracks[i].revision : rev(i) })
+  }
+
+  function applyTake(i: number, samples: Float32Array, opts: Parameters<LoopEngine['applyTake']>[2] = {}) {
+    if (!valid(i) || i === D || busy() || recs[i] ||
+      state.tracks[i].status === 'armed' || state.tracks[i].status === 'recording') return
+    const c = ctx!
+    const sampleRate = opts.sampleRate ?? c.sampleRate
+    if (!Number.isFinite(sampleRate) || sampleRate <= 0) return
+    const buffer = prepareTake(samples, sampleRate)
+    invalidateBatch(i)
+    const source = validSource(opts.source) ? opts.source : state.tracks[i].source
+    undoTake[i] = takeSnapshot(i)
+    if (source !== state.tracks[i].source) stopLive(i)
+    if (state.micTrack === i) set({ micTrack: null })
+    buffers[i] = buffer
+    peaks[i] = null
+    if (state.playing) startSource(i, c.currentTime + 0.02)
+    patchTrack(i, { source, notes: isInstrument(source) ? gridNotes(opts.notes) : null, reverb: sourceReverb(source, state.tracks[i].reverb), status: 'recorded', canUndo: true, silentTake: false, revision: rev(i) })
+  }
+
+  async function setTrackNotes(i: number, input: GridNote[]): Promise<boolean> {
+    if (!valid(i) || i === D || busy() || recs[i]) return false
+    const source = state.tracks[i].source
+    if (!isInstrument(source)) return false
+    const notes = gridNotes(input)
+    if (!notes) return false
+    const request = ++noteGeneration[i]
+    const sd = stepDuration(state.bpm)
+    if (!notes.length) {
+      invalidateBatch(i)
+      undoTake[i] = takeSnapshot(i)
+      stopLive(i)
+      dropTrack(i)
+      patchTrack(i, { status: 'empty', notes: null, canUndo: true, silentTake: false, revision: rev(i) })
+      return true
+    }
+    try {
+      const buffer = await renderNotes(notes.map((note) => ({ time: note.step * sd, duration: note.length * sd, midi: note.midi })), state.loopDuration, ctx!.sampleRate, source)
+      if (request !== noteGeneration[i] || !valid(i) || busy() || recs[i] || state.tracks[i].source !== source) return false
+      applyTake(i, buffer.getChannelData(0), { sampleRate: buffer.sampleRate, source, notes })
+      return true
+    } catch { return false }
   }
 
   return {
@@ -1123,7 +1235,7 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
         sounding[i].clear()
         dropTrack(i)
       }
-      set({ status: 'disposed', canRestoreTrack: false, tracks: state.tracks.map((t) => ({ ...t, status: 'empty' as const })) })
+      set({ status: 'disposed', canRestoreTrack: false, tracks: state.tracks.map((t) => ({ ...t, status: 'empty' as const, notes: null })) })
       listeners.clear()
     },
 
@@ -1137,7 +1249,9 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
       if (ready()) set({ latencyOffset: clamp(ms, -200, 200, state.latencyOffset) })
     },
     setKey(key) {
-      if (ready() && KEYS.includes(key) && key !== state.key) set({ key })
+      if (!ready() || !KEYS.includes(key) || key === state.key) return
+      for (let i = 0; i < n; i++) stopLive(i)
+      set({ key })
     },
     setScale(scale) {
       if (!ready() || !PAD_SCALES.includes(scale) || scale === state.scale) return
@@ -1146,6 +1260,7 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
     },
     noteOn,
     noteOff,
+    previewNote,
 
     setMasterVolume(volume) {
       if (!ready()) return
@@ -1193,6 +1308,7 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
         tracks: state.tracks.map((t, i) => ({
           ...t,
           status: 'empty' as const,
+          notes: null,
           silentTake: false,
           revision: t.revision + 1,
           canUndo: i === D ? undoPattern !== null : undoTake[i] !== undefined,
@@ -1207,8 +1323,8 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
       const prev = state.tracks[i]
       const merged = mergeParams(prev, params, defaultName(i))
       const next = { ...merged, reverb: merged.source !== prev.source ? sourceReverb(merged.source, merged.reverb) : merged.reverb }
+      if (next.source !== prev.source || next.padMode !== prev.padMode) stopLive(i)
       if (next.source !== prev.source) {
-        stopLive(i)
         if (recs[i]) cancelRec(i)
         if (state.micTrack === i) set({ micTrack: null })
       }
@@ -1253,23 +1369,8 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
       return buffer ? { samples: buffer.getChannelData(0).slice(), sampleRate: buffer.sampleRate } : null
     },
 
-    applyTake(i, samples, opts = {}) {
-      if (!valid(i) || i === D || busy() || recs[i] ||
-        state.tracks[i].status === 'armed' || state.tracks[i].status === 'recording') return
-      const c = ctx!
-      const sampleRate = opts.sampleRate ?? c.sampleRate
-      if (!Number.isFinite(sampleRate) || sampleRate <= 0) return
-      const buffer = prepareTake(samples, sampleRate)
-      invalidateBatch(i)
-      const source = validSource(opts.source) ? opts.source : state.tracks[i].source
-      undoTake[i] = takeSnapshot(i)
-      if (source !== state.tracks[i].source) stopLive(i)
-      if (state.micTrack === i) set({ micTrack: null })
-      buffers[i] = buffer
-      peaks[i] = null
-      if (state.playing) startSource(i, c.currentTime + 0.02)
-      patchTrack(i, { source, reverb: sourceReverb(source, state.tracks[i].reverb), status: 'recorded', canUndo: true, silentTake: false, revision: rev(i) })
-    },
+    applyTake,
+    setTrackNotes,
 
     applyBatch(batch) {
       if (!ready() || busy() || recording()) return false
@@ -1284,12 +1385,13 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
         seen.add(take.track)
       }
       if (batch.pattern !== undefined && (!Array.isArray(batch.pattern) || !batch.pattern.every(Array.isArray))) return false
-      let prepared: { index: number; buffer: AudioBuffer; source: TrackSource }[]
+      let prepared: { index: number; buffer: AudioBuffer; source: TrackSource; notes: GridNote[] | null }[]
       let pattern: boolean[][] | undefined
       try {
         prepared = takes.map((take) => ({
           index: take.track, buffer: prepareTake(take.samples, take.sampleRate),
           source: take.source ?? state.tracks[take.track].source,
+          notes: gridNotes(take.notes),
         }))
         if (batch.pattern !== undefined) pattern = resizePattern(DRUM_VOICES.map((_, v) => batch.pattern![v] ?? []), state.bars * STEPS_PER_BAR)
       } catch { return false }
@@ -1305,11 +1407,11 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
       try {
         // Fontes antigas seguem em fase enquanto todas as novas são preparadas.
         if (state.playing) for (const { index, buffer } of prepared) staged.set(index, makeSource(index, buffer, when))
-        for (const { index, buffer, source } of prepared) {
+        for (const { index, buffer, source, notes } of prepared) {
           buffers[index] = buffer
           undoTake[index] = undefined
           peaks[index] = null
-          tracks[index] = { ...tracks[index], source, reverb: sourceReverb(source, tracks[index].reverb), status: 'recorded', canUndo: false, silentTake: false, revision: rev(index) }
+          tracks[index] = { ...tracks[index], source, notes: isInstrument(source) ? notes : null, reverb: sourceReverb(source, tracks[index].reverb), status: 'recorded', canUndo: false, silentTake: false, revision: rev(index) }
           if (state.playing) {
             const old = sources[index]
             if (old) {
@@ -1371,7 +1473,7 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
         buffers[index] = take.buffer
         undoTake[index] = undo
         peaks[index] = null
-        tracks[index] = { ...tracks[index], source: take.source, reverb: take.reverb, status: take.buffer ? 'recorded' : 'empty', canUndo: undo !== undefined, silentTake, revision: rev(index) }
+        tracks[index] = { ...tracks[index], source: take.source, reverb: take.reverb, notes: take.notes, status: take.buffer ? 'recorded' : 'empty', canUndo: undo !== undefined, silentTake, revision: rev(index) }
       }
       if (saved.pattern) {
         undoPattern = saved.pattern.undo
@@ -1482,7 +1584,7 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
         tracks: state.tracks.map((t, i) => {
           const b = buffers[i]
           const audio = b ? (b.sampleRate === sr ? b.getChannelData(0).slice() : resample(b.getChannelData(0), len)) : null
-          return { ...pickParams(t), audio }
+          return { ...pickParams(t), audio, ...(t.notes ? { notes: t.notes.map((note) => ({ ...note })) } : {}) }
         }),
         pattern: state.pattern.map((row) => row.slice()),
       }
@@ -1506,7 +1608,8 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
           buffers[i] = new AudioBuffer({ numberOfChannels: 1, length: audio.length, sampleRate: sr })
           buffers[i]!.copyToChannel(Float32Array.from(audio), 0)
         }
-        return { ...mergeParams({ ...cur, name: defaultName(i), source: 'mic' }, t ?? {}, defaultName(i)), status: buffers[i] ? ('recorded' as const) : ('empty' as const), canUndo: false, silentTake: false, revision: cur.revision + 1 }
+        const params = mergeParams({ ...cur, name: defaultName(i), source: 'mic', padMode: 'notes' }, t ?? {}, defaultName(i))
+        return { ...params, notes: buffers[i] && isInstrument(params.source) ? gridNotes(t?.notes) : null, status: buffers[i] ? ('recorded' as const) : ('empty' as const), canUndo: false, silentTake: false, revision: cur.revision + 1 }
       })
       const pattern = resizePattern(
         DRUM_VOICES.map((_, v) => data.pattern?.[v] ?? []),

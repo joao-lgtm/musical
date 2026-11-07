@@ -32,8 +32,23 @@ export type PadScale = 'pentatonic' | 'major'
 export const PAD_SCALES: readonly PadScale[] = ['pentatonic', 'major']
 /** Quantidade de pads por escala: pentatônica 8 graus; maior 10 graus (tônica até a 3ª da oitava de cima). */
 export const PAD_COUNT: Readonly<Record<PadScale, number>> = { pentatonic: 8, major: 10 }
+/** Modo dos pads de um canal de instrumento: notas soltas da escala ou acordes inteiros do tom. */
+export type PadMode = 'notes' | 'chords'
+/** Pads de acorde: graus I, IV, V, vi do tom maior (nomes amigáveis na UI: Casa, Sobe, Tensão, Triste). */
+export const CHORD_DEGREES = ['I', 'IV', 'V', 'vi'] as const
+export type ChordDegree = (typeof CHORD_DEGREES)[number]
 /** Máximo de pads (para teclado/atalhos). */
 export const NOTE_PADS = 10
+
+/**
+ * Nota simbólica de um canal de instrumento (grade "Montar na grade").
+ * step/length em semicolcheias desde o início do loop (fracionários permitidos); midi absoluto (trocar escala/tom não altera notas já escritas).
+ */
+export interface GridNote {
+  readonly step: number
+  readonly length: number
+  readonly midi: number
+}
 
 export interface TrackState {
   readonly kind: TrackKind
@@ -53,6 +68,10 @@ export interface TrackState {
   readonly overdubbing: boolean
   /** Só canais mic. 'mic' por padrão; com instrumento, gravar NÃO pede microfone e o take não usa a latência de entrada nem latencyOffset. */
   readonly source: TrackSource
+  /** Só canais de instrumento: 'notes' (padrão) ou 'chords' (noteOn(track, i) toca a tríade de CHORD_DEGREES[i]). */
+  readonly padMode: PadMode
+  /** Notas do take de instrumento (pads, grade, Transformar, Completar, banda). null = take só de áudio (microfone, projeto antigo) ou vazio. */
+  readonly notes: readonly GridNote[] | null
   /** Há um estado anterior (1 nível) para undo(track). */
   readonly canUndo: boolean
   /** true quando o último take/overdub do canal mic foi descartado por estar mudo; volta a false ao armar, limpar, desfazer ou importar */
@@ -130,7 +149,7 @@ export interface Position {
 }
 
 /** Configuração editável de um canal (tudo de TrackState menos kind/status). */
-export type TrackParams = Pick<TrackState, 'name' | 'volume' | 'muted' | 'solo' | 'pan' | 'filter' | 'delay' | 'reverb' | 'nudge' | 'overdubbing' | 'source'>
+export type TrackParams = Pick<TrackState, 'name' | 'volume' | 'muted' | 'solo' | 'pan' | 'filter' | 'delay' | 'reverb' | 'nudge' | 'overdubbing' | 'source' | 'padMode'>
 
 /** Projeto serializável (IndexedDB). Áudio mono por canal mic; null = vazio. */
 export interface ProjectData {
@@ -144,7 +163,7 @@ export interface ProjectData {
   scale?: PadScale
   sampleRate: number
   /** `source` ausente em projetos antigos → 'mic'. */
-  tracks: (Omit<TrackParams, 'source'> & { source?: TrackSource; audio: Float32Array | null })[]
+  tracks: (Omit<TrackParams, 'source' | 'padMode'> & { source?: TrackSource; padMode?: PadMode; audio: Float32Array | null; notes?: GridNote[] })[]
   pattern: boolean[][]
 }
 
@@ -197,8 +216,14 @@ export interface LoopEngine {
    * O lote invalida o undo individual dos canais envolvidos; undoBatch restaura takes, sources e padrão anteriores.
    * canUndoBatch vira false após undoBatch, nova gravação/limpeza/applyTake nesses canais, setPattern/toggleStep, mudança de BPM/compassos, removeTrack, importProject, clearAll ou dispose.
    */
-  applyBatch(batch: { takes?: { track: number; samples: Float32Array; sampleRate?: number; source?: TrackSource }[]; pattern?: boolean[][] }): boolean
+  applyBatch(batch: { takes?: { track: number; samples: Float32Array; sampleRate?: number; source?: TrackSource; notes?: GridNote[] }[]; pattern?: boolean[][] }): boolean
   undoBatch(): void
+  /**
+   * Substitui as notas de um canal com source de instrumento e re-renderiza o take (renderNotes, offline). Pedidos rápidos em sequência: vale o último.
+   * Lista vazia → canal vazio. Desfazível como uma regravação (1 nível). Ignorado em canal armado/gravando, calibração, drums ou source 'mic'.
+   * Resolve true quando o take renderizado foi aplicado; false se foi substituído por um pedido mais novo ou recusado.
+   */
+  setTrackNotes(track: number, notes: GridNote[]): Promise<boolean>
   /** Atualiza parâmetros do canal (merge parcial). Valores fora da faixa são limitados. */
   setTrack(track: number, params: Partial<TrackParams>): void
   /** skipNext: ao inserir via pad ao vivo, pula apenas a ocorrência quantizada ainda não processada pelo scheduler; as próximas voltas tocam normalmente. */
@@ -208,11 +233,17 @@ export interface LoopEngine {
   setScale(scale: PadScale): void
   /**
    * Toca/solta uma nota do instrumento do canal (grau 0..PAD_COUNT[state.scale]-1 de padNotes(state.key, state.scale, INSTRUMENT_OCTAVE[source])).
+   * Com padMode 'chords': i em 0..CHORD_DEGREES.length-1 toca/solta a tríade inteira (chordPads de harmony.ts), contando como 3 vozes; no take viram 3 GridNotes.
    * Ignorado se o canal não tiver source de instrumento. Soa ao vivo e, se o canal estiver 'recording', entra no take.
    * Polifônico até 4 vozes por canal (a mais antiga é cortada com rampa). noteOff sem noteOn é ignorado.
    */
   noteOn(track: number, degree: number): void
   noteOff(track: number, degree: number): void
+  /**
+   * Prévia curta de uma nota MIDI qualquer (inclusive fora da escala) no instrumento do canal, pelo mixer do canal (volume/pan/FX), sem gravar no take.
+   * Para a grade de notas. Respeita o limite de vozes; duration em segundos (padrão 0.25). Ignorado se o canal não for de instrumento.
+   */
+  previewNote(track: number, midi: number, duration?: number): void
   toggleStep(voice: number, step: number, opts?: { skipNext?: boolean }): void
   /** Substitui o padrão inteiro numa única notificação; redimensionado para bars*STEPS_PER_BAR (repete ou corta). */
   setPattern(pattern: boolean[][]): void
@@ -228,7 +259,7 @@ export interface LoopEngine {
    * Desfazível como uma regravação (undo restaura o take e o source anteriores). Opcionalmente troca o source do canal.
    * Ignorado em canal armado/gravando, durante a calibração ou no canal drums.
    */
-  applyTake(track: number, samples: Float32Array, opts?: { sampleRate?: number; source?: TrackSource }): void
+  applyTake(track: number, samples: Float32Array, opts?: { sampleRate?: number; source?: TrackSource; notes?: GridNote[] }): void
   /** Segundos (no relógio ouvido) até a gravação do canal armado começar de fato; null se não armado. Para rAF. */
   getArmedIn(track: number): number | null
   /** Nível atual 0..1 já em escala de meter (pico em dB, -48..0 dB → 0..1) por canal (tracks.length valores) + master no fim, para VU meters. */

@@ -12,7 +12,7 @@ function state(): EngineState {
     tracks: [{
       kind: 'mic', name: 'Faixa 1', status: 'empty', volume: 1, muted: false,
       solo: false, pan: 0, filter: 1, delay: 0, reverb: 0, nudge: 0,
-      overdubbing: false, source: 'mic', canUndo: false, silentTake: false, revision: 0,
+      overdubbing: false, source: 'mic', padMode: 'notes', notes: null, canUndo: false, silentTake: false, revision: 0,
     }],
   }
 }
@@ -74,6 +74,31 @@ describe('hasDraftContentChanged', () => {
   it('detecta revision mesmo sem mudar os params', () => {
     const base = state()
     expect(hasDraftContentChanged(base, trackChange(base, { revision: 1 }))).toBe(true)
+  })
+
+  it('compara notas genericamente sem depender de revision', () => {
+    const base = state()
+    const note = { step: 2, length: 4, midi: 60 }
+    const withNotes = trackChange(base, { notes: [note] })
+    expect(hasDraftContentChanged(base, withNotes)).toBe(true)
+    expect(hasDraftContentChanged(withNotes, base)).toBe(true)
+    expect(hasDraftContentChanged(withNotes, trackChange(base, { notes: [{ ...note }] }))).toBe(false)
+    for (const patch of [{ step: 3 }, { length: 2 }, { midi: 62 }]) {
+      const next = trackChange(base, { notes: [{ ...note, ...patch }] })
+      expect(hasDraftContentChanged(withNotes, next)).toBe(true)
+      expect(observeDraft(createDraftProgress(withNotes), next).dirty).toBe(true)
+    }
+    expect(hasDraftContentChanged(withNotes, trackChange(base, { notes: [] }))).toBe(true)
+    expect(hasDraftContentChanged(withNotes, trackChange(base, { notes: [note, { ...note, step: 8 }] }))).toBe(true)
+  })
+
+  it('detecta padMode pela comparacao generica sem mudar revision', () => {
+    const base = state()
+    const chords = trackChange(base, { padMode: 'chords' })
+    expect(hasDraftContentChanged(base, chords)).toBe(true)
+    expect(hasDraftContentChanged(chords, base)).toBe(true)
+    expect(observeDraft(createDraftProgress(base), chords).dirty).toBe(true)
+    expect(hasDraftContentChanged(base, trackChange(base, { padMode: 'notes' }))).toBe(false)
   })
 
   it('detecta todos os params atuais', () => {

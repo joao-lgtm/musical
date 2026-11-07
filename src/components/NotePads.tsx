@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Key, LoopEngine, PadScale } from '../audio/types'
 import { PAD_COUNT, PAD_SCALES, INSTRUMENT_LABEL, INSTRUMENT_OCTAVE, isInstrument } from '../audio/types'
+import { chordPads } from '../audio/harmony'
 import type { Chord } from '../audio/harmony'
 import { KEYS } from '../audio/types'
 import { padNotes } from '../audio/scale'
@@ -11,6 +12,7 @@ const NOTE_KEYS = ['A', 'S', 'D', 'F', 'G', 'H', 'J', 'K', 'L', 'Ç']
 
 export interface CoachGuidance { track: number; phase: 'bass' | 'harmony' | 'melody'; chords: Chord[] }
 const guidance = new WeakMap<LoopEngine, CoachGuidance>()
+export const getCoachGuidance = (engine: LoopEngine) => guidance.get(engine)
 export function setCoachGuidance(engine: LoopEngine, value: CoachGuidance | null) {
   if (value) guidance.set(engine, value)
   else guidance.delete(engine)
@@ -30,6 +32,7 @@ export function NotePads({ track }: { track: number }) {
   const engine = useEngine()
   const { key, scale, status, tracks } = useEngineState(engine)
   const source = tracks[track].source
+  const chordsMode = tracks[track].padMode === 'chords'
   const instrument = isInstrument(source) ? source : 'ocarina'
   const padRoot = useRef<HTMLDivElement>(null)
   const [coach, setCoach] = useState<CoachGuidance | null>(null)
@@ -69,7 +72,8 @@ export function NotePads({ track }: { track: number }) {
   }, [engine, track, coach, instrument, key, scale])
   const held = useRef(new Map<string, number>())
   const [pressed, setPressed] = useState<number[]>([])
-  const notes = padNotes(key, scale, INSTRUMENT_OCTAVE[instrument]).slice(0, PAD_COUNT[scale])
+  const chords = chordPads(key, INSTRUMENT_OCTAVE[instrument])
+  const notes = chordsMode ? chords.map((c) => c.midis[0]) : padNotes(key, scale, INSTRUMENT_OCTAVE[instrument]).slice(0, PAD_COUNT[scale])
   function start(id: string, degree: number) {
     if (held.current.has(id)) return
     rememberInstrument(engine, track)
@@ -101,26 +105,26 @@ export function NotePads({ track }: { track: number }) {
       for (const degree of notesHeld.values()) engine.noteOff(track, degree)
       notesHeld.clear()
     }
-  }, [engine, track, key, scale, instrument])
+  }, [engine, track, key, scale, instrument, chordsMode])
   return (
     <div className="instrument-pads">
-      <label className="pad-scale"><span className="field__label">Escala</span>
+      {!chordsMode && <label className="pad-scale"><span className="field__label">Escala</span>
         <select aria-label={`Escala das notas, faixa ${track + 1}`} value={scale} onChange={(e) => engine.setScale(e.target.value as PadScale)}>
           {PAD_SCALES.map((value) => <option key={value} value={value}>{value === 'major' ? 'Maior (todas as notas)' : 'Pentatônica (nunca erra)'}</option>)}
         </select>
-      </label>
-    <div ref={padRoot} className="note-pads" data-scale={scale} data-track={track} role="group" aria-label={`Notas de ${INSTRUMENT_LABEL[instrument]}, faixa ${track + 1}`}>
+      </label>}
+    <div ref={padRoot} className="note-pads" data-scale={scale} data-chords={chordsMode || undefined} data-track={track} role="group" aria-label={`${chordsMode ? 'Acordes' : 'Notas'} de ${INSTRUMENT_LABEL[instrument]}, faixa ${track + 1}`}>
       {notes.map((midi, degree) => {
         const name = NOTE_NAMES[midi % 12]
         const octave = Math.floor(midi / 12) - 1
         return <button key={degree} type="button" className="note-pad" data-degree={degree} disabled={status !== 'ready'}
-          aria-label={`${name}, oitava ${octave}`} data-playing={pressed.includes(degree) || undefined}
+          aria-label={chordsMode ? `${chords[degree].label}, ${chords[degree].name}` : `${name}, oitava ${octave}`} data-playing={pressed.includes(degree) || undefined}
           onPointerDown={(e) => { if (e.button !== 0) return; e.preventDefault(); e.currentTarget.focus(); e.currentTarget.setPointerCapture(e.pointerId); start(`p${e.pointerId}`, degree) }}
           onPointerUp={(e) => stop(`p${e.pointerId}`)} onPointerCancel={(e) => stop(`p${e.pointerId}`)}
           onLostPointerCapture={(e) => stop(`p${e.pointerId}`)}
           onKeyDown={(e) => { if ((e.key === 'Enter' || e.code === 'Space') && !e.repeat) { e.preventDefault(); start(`b${degree}`, degree) } }}
           onKeyUp={(e) => { if (e.key === 'Enter' || e.code === 'Space') { e.preventDefault(); stop(`b${degree}`) } }}
-          onBlur={() => stop(`b${degree}`)}><span>{name} {octave}</span><kbd className="note-pad__key" aria-hidden="true">{NOTE_KEYS[degree]}</kbd></button>
+          onBlur={() => stop(`b${degree}`)}><span>{chordsMode ? <><strong>{chords[degree].label}</strong><small>{chords[degree].name}</small></> : <>{name} {octave}</>}</span><kbd className="note-pad__key" aria-hidden="true">{NOTE_KEYS[degree]}</kbd></button>
       })}
     </div>
     </div>

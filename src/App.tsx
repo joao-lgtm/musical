@@ -1,4 +1,4 @@
-import { PAD_COUNT, isInstrument } from './audio/types'
+import { CHORD_DEGREES, PAD_COUNT, isInstrument } from './audio/types'
 import { useEffect, useRef, useState } from 'react'
 import { Calibration } from './components/Calibration'
 import { CountIn } from './components/CountIn'
@@ -95,6 +95,7 @@ export default function App() {
     document.addEventListener('fullscreenchange', onFs)
     return () => document.removeEventListener('fullscreenchange', onFs)
   }, [])
+  const padModes = state.tracks.map((track) => track.padMode).join('|')
   const micCount = state.tracks.length - 1
 
   function chooseMode(on: boolean) {
@@ -123,14 +124,14 @@ export default function App() {
     }
     const down = (e: KeyboardEvent) => {
       const degree = NOTE_CODES.indexOf(e.code)
-      if (degree < 0 || degree >= PAD_COUNT[engine.getState().scale] || e.repeat || held.has(e.code) || e.ctrlKey || e.metaKey || e.altKey ||
+      if (degree < 0 || e.repeat || held.has(e.code) || e.ctrlKey || e.metaKey || e.altKey ||
           focusIn(e.target, FIELD) || document.querySelector('dialog[open]')) return
       const tracks = engine.getState().tracks
       const active = tracks.findIndex((t) => isInstrument(t.source) && (t.status === 'armed' || t.status === 'recording'))
       const last = lastInstrument(engine)
       const track = active >= 0 ? active : last !== undefined && tracks[last] && isInstrument(tracks[last].source)
         ? last : tracks.findIndex((t) => isInstrument(t.source))
-      if (track < 0) return
+      if (track < 0 || degree >= (tracks[track].padMode === 'chords' ? CHORD_DEGREES.length : PAD_COUNT[engine.getState().scale])) return
       e.preventDefault()
       held.set(e.code, { track, degree })
       rememberInstrument(engine, track)
@@ -156,7 +157,7 @@ export default function App() {
       window.removeEventListener('blur', release)
       document.removeEventListener('visibilitychange', visibility)
     }
-  }, [engine, ready, calibrating, state.scale, state.key])
+  }, [engine, ready, calibrating, state.scale, state.key, padModes])
 
   // Espaço = tocar/parar, 1–8 = gravar, P = performance, ? = atalhos (Q W E R ficam com o Sequencer)
   useEffect(() => {

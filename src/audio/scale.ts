@@ -23,6 +23,23 @@ export function padNotes(key: Key, scale: PadScale, baseOctave = 4): number[] {
   return scale === 'major' ? major(key, PAD_COUNT.major, baseOctave) : pentatonic(key, PAD_COUNT.pentatonic, baseOctave)
 }
 
+/** Classes de altura (0..11) da escala dos pads no tom. */
+export function scalePitchClasses(key: Key, scale: PadScale): number[] {
+  const root = KEYS.indexOf(key)
+  return (scale === 'major' ? MAJOR : INTERVALS).map((i) => (root + i) % 12)
+}
+
+/** A nota da escala mais próxima de midi, em qualquer oitava (empate → a de baixo). Nota já na escala volta igual. */
+export function snapToScale(midi: number, key: Key, scale: PadScale): number {
+  const classes = scalePitchClasses(key, scale)
+  const m = Math.round(midi)
+  for (let d = 0; d <= 6; d++) {
+    if (classes.includes((((m - d) % 12) + 12) % 12)) return m - d
+    if (classes.includes((((m + d) % 12) + 12) % 12)) return m + d
+  }
+  return m
+}
+
 export function midiToHz(midi: number): number {
   return 440 * 2 ** ((midi - 69) / 12)
 }

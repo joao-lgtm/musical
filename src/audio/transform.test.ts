@@ -252,6 +252,8 @@ describe('completeFromTake e bandFromStyle', () => {
     expect(accompany).toHaveBeenCalledExactlyOnceWith(notes, 100, 2)
     expect(result!.key).toBe('D')
     expect(result!.chords).toEqual(['D', 'A'])
+    expect(result!.chordNotes).toEqual([{ step: 0, length: 1 / 0.15, midi: 62 }])
+    expect(result!.bassNotes).toEqual([{ step: 0, length: 0.5 / 0.15, midi: 38 }])
     expect(renderNotes).toHaveBeenNthCalledWith(1, harmony.chordNotes, 4.8, 44100, instrument)
     expect(renderNotes).toHaveBeenNthCalledWith(2, harmony.bassNotes, 4.8, 44100, 'bass')
     expect(result!.chordsAudio).toHaveLength(Math.round(4.8 * 44100))
@@ -272,6 +274,8 @@ describe('completeFromTake e bandFromStyle', () => {
       const result = await bandFromStyle('G', 100, bars, 'funk', seed)
       expect(progression).toHaveBeenLastCalledWith('G', 100, bars, 'funk', seed)
       expect(result.chords).toEqual(['D', 'A'])
+      expect(result.chordNotes).toEqual([{ step: 0, length: 1 / 0.15, midi: 62 }])
+      expect(result.bassNotes).toEqual([{ step: 0, length: 0.5 / 0.15, midi: 38 }])
       expect(result.chordInstrument).toBe(instrument)
       expect(result.chordsAudio).toHaveLength(Math.round(bars * 2.4 * 48000))
       expect(result.bassAudio).toHaveLength(Math.round(bars * 2.4 * 48000))
@@ -283,6 +287,37 @@ describe('completeFromTake e bandFromStyle', () => {
     expect(a).toEqual(b)
     expect(transcribe).not.toHaveBeenCalled()
   })
+  it.each([[60, 1.24, 1.75], [120, 2.48, 3.5], [180, 3.72, 5.25]])('converte segundos para GridNote sem perder fracoes a %i BPM', async (bpm, step, length) => {
+    const harmony: Accompaniment = {
+      ...acc(), chordNotes: [{ time: 0.31, duration: 0.4375, midi: 66 }],
+      bassNotes: [{ time: 0.155, duration: 0.21875, midi: 38 }],
+    }
+    const original = structuredClone(harmony)
+    vi.mocked(transcribe).mockResolvedValue([{ step: 0, length: 4, midi: 66 }])
+    vi.mocked(accompany).mockReturnValue(harmony)
+    vi.mocked(progression).mockReturnValue(harmony)
+    mockRender()
+    const completed = await completeFromTake(new Float32Array(2), 48000, bpm, 1)
+    const band = await bandFromStyle('D', bpm, 1, 'pop', 0)
+    for (const result of [completed!, band]) {
+      expect(result.chordNotes).toHaveLength(1)
+      expect(result.bassNotes).toHaveLength(1)
+      expect(result.chordNotes[0].step).toBeCloseTo(step, 12)
+      expect(result.chordNotes[0].length).toBeCloseTo(length, 12)
+      expect(result.chordNotes[0].midi).toBe(66)
+      expect(result.bassNotes[0].step).toBeCloseTo(step / 2, 12)
+      expect(result.bassNotes[0].length).toBeCloseTo(length / 2, 12)
+      expect(result.bassNotes[0].midi).toBe(38)
+      expect(result.chordNotes).not.toBe(harmony.chordNotes)
+    }
+    expect(harmony).toEqual(original)
+  })
+  it('retorna a melodia transposta em GridNote com tempos fracionarios intactos', async () => {
+    vi.mocked(transcribe).mockResolvedValue([{ step: 2.48, length: 3.5, midi: 64 }])
+    mockRender()
+    const result = await voiceToInstrument(new Float32Array(2), 48000, 120, 1, 'C', 'bass')
+    expect(result.notes).toEqual([{ step: 2.48, length: 3.5, midi: 40 }])
+  })
   it('permite gerar a banda na taxa do motor e aceita baixo silencioso', async () => {
     vi.mocked(progression).mockReturnValue({ ...acc(), bassNotes: [] })
     mockRender()
@@ -290,6 +325,7 @@ describe('completeFromTake e bandFromStyle', () => {
     expect(result.chordsAudio).toHaveLength(88200)
     expect(result.bassAudio).toHaveLength(88200)
     expect(result.bassAudio.every(value => value === 0)).toBe(true)
+    expect(result.bassNotes).toEqual([])
     expect(renderNotes).toHaveBeenCalledTimes(1)
   })
 })
