@@ -380,6 +380,97 @@ describe('audio sem permissao de microfone', () => {
     expect(master.linearRampToValueAtTime).not.toHaveBeenCalled()
   })
 
+  describe('swing e roda', () => {
+    it('limita swing, exporta e importa com default zero para projeto antigo', async () => {
+      await engine.init()
+      expect(engine.getState().swing).toBe(0)
+      engine.setSwing(2)
+      expect(engine.getState().swing).toBe(0.5)
+      engine.setSwing(-1)
+      expect(engine.getState().swing).toBe(0)
+      engine.setSwing(0.3)
+      engine.setSwing(NaN)
+      const project = engine.exportProject()
+      expect(project.swing).toBe(0.3)
+      engine.setSwing(0)
+      engine.importProject(project)
+      expect(engine.getState().swing).toBe(0.3)
+      delete project.swing
+      engine.importProject(project)
+      expect(engine.getState().swing).toBe(0)
+    })
+
+    it.each([false, true])('scheduler atrasa somente impares, liveDrums=%s', async (live) => {
+      await engine.init()
+      engine.setBpm(120)
+      engine.setBars(1)
+      engine.setMetronome(false)
+      engine.setLiveDrums(live)
+      engine.setSwing(0.5)
+      engine.setPattern([[true]])
+      const play = vi.spyOn(kits, 'playKitVoice').mockImplementation(() => {})
+      vi.spyOn(groove, 'humanize').mockReturnValue({ velocity: 0.7, offset: 0.003 })
+      engine.play()
+      const ctx = TestContext.instances[0]
+      for (const time of [0.15, 0.25, 0.4]) { ctx.currentTime = time; vi.advanceTimersByTime(25) }
+      const expected = [0.05, 0.2375, 0.3, 0.4875]
+      expect(play).toHaveBeenCalledTimes(4)
+      for (let i = 0; i < expected.length; i++) expect(play.mock.calls[i][4]).toBeCloseTo(expected[i] + (live ? 0.003 : 0))
+    })
+
+    it('mantem contrapasso futuro mesmo com tempo reto passado e limita jitter no now', async () => {
+      await engine.init()
+      engine.setBpm(120)
+      engine.setSwing(0.5)
+      engine.setMetronome(false)
+      engine.setPattern([[false, true]])
+      const play = vi.spyOn(kits, 'playKitVoice').mockImplementation(() => {})
+      vi.spyOn(groove, 'humanize').mockReturnValue({ velocity: 1, offset: -0.005 })
+      engine.play()
+      TestContext.instances[0].currentTime = 0.236
+      vi.advanceTimersByTime(25)
+      expect(play.mock.calls[0][4]).toBe(0.236)
+    })
+
+    it('render offline soma swing e humanizacao a partir da saida recortada', async () => {
+      await engine.init()
+      engine.setBpm(120)
+      engine.setBars(1)
+      engine.setSwing(0.5)
+      engine.setPattern([[true]])
+      class Offline extends TestContext {
+        channels: number
+        length: number
+        constructor(channels: number, length: number, rate: number) { super(); this.channels = channels; this.length = length; this.sampleRate = rate }
+        async startRendering() { return new TestBuffer({ numberOfChannels: this.channels, length: this.length, sampleRate: this.sampleRate }) }
+      }
+      vi.stubGlobal('OfflineAudioContext', Offline)
+      const play = vi.spyOn(kits, 'playKitVoice').mockImplementation(() => {})
+      vi.spyOn(groove, 'humanize').mockReturnValue({ velocity: 0.6, offset: 0.003 })
+      await engine.renderMix(1)
+      const output = play.mock.calls.filter((call) => call[4] >= 4).slice(0, 4)
+      const expected = [4.003, 4.1905, 4.253, 4.4405]
+      expect(output).toHaveLength(4)
+      for (let i = 0; i < 4; i++) expect(output[i][4]).toBeCloseTo(expected[i])
+    })
+
+    it('roda toca slot zero e swing nao muda take nem notas de instrumento', async () => {
+      await engine.init()
+      engine.setKit('roda')
+      const play = vi.spyOn(kits, 'playKitVoice').mockImplementation(() => {})
+      engine.triggerDrum(0)
+      expect(play.mock.calls[0].slice(2)).toEqual(['roda', 0, 0])
+      engine.applyTake(0, Float32Array.of(0.3), { source: 'cavaquinho', notes: [{ step: 1, length: 2, midi: 60 }] })
+      expect(engine.getState().tracks[0].reverb).toBe(0.12)
+      const track = engine.getState().tracks[0]
+      const audio = engine.getTakeAudio(0)
+      engine.setSwing(0.4)
+      expect(engine.getState().tracks[0]).toBe(track)
+      expect(engine.getTakeAudio(0)).toEqual(audio)
+      expect(engine.exportProject().kit).toBe('roda')
+    })
+  })
+
   describe('kits e oito slots', () => {
     it('estado inicial, setPattern e applyBatch normalizam quatro ou mais linhas para oito', async () => {
       await engine.init()
@@ -933,7 +1024,7 @@ describe('audio sem permissao de microfone', () => {
 
     it.each(INSTRUMENTS)('default de reverb para %s ao trocar source e aplicar take', async (instrument) => {
       await engine.init()
-      const expected = { ocarina: 0.2, flute: 0.2, kalimba: 0.15, bass: 0 }[instrument]
+      const expected = { ocarina: 0.2, flute: 0.2, kalimba: 0.15, bass: 0, cavaquinho: 0.12 }[instrument]
       engine.setTrack(0, { source: instrument })
       expect(engine.getState().tracks[0].reverb).toBe(expected)
       engine.applyTake(1, Float32Array.of(0.2), { source: instrument })
@@ -1494,7 +1585,7 @@ describe('audio sem permissao de microfone', () => {
       await engine.init()
       engine.setTrack(0, { source: instrument })
       engine.noteOn(0, 0)
-      const expected = { ocarina: 60, flute: 72, kalimba: 60, bass: 36 }[instrument]
+      const expected = { ocarina: 60, flute: 72, kalimba: 60, bass: 36, cavaquinho: 60 }[instrument]
       expect(voices.mock.calls[0][2]).toBe(expected)
       expect(voices.mock.calls[0][4]).toBe(instrument)
       engine.noteOff(0, 0)

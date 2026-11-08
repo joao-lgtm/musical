@@ -41,7 +41,7 @@ function voicing(pitches: number[], previous: number[], octave = 4): number[] {
   for (let bottom = 52 + offset; bottom <= 72 + offset; bottom++) {
     if (!pitches.includes(pc(bottom))) continue
     const candidate = pitches.map(pitch => bottom + (pitch - pc(bottom) + 12) % 12).sort((a, b) => a - b)
-    if (candidate[2] > 79 + offset) continue
+    if (candidate[candidate.length - 1] > 79 + offset) continue
     const movement = candidate.reduce((sum, midi, i) => sum + Math.abs(midi - previous[i]), 0)
     if (movement < cost) { best = candidate; cost = movement }
   }
@@ -106,9 +106,12 @@ export function accompany(notes: MelodyNote[], bpm: number, bars: 1 | 2 | 4): Ac
   return result
 }
 
-export type ProgressionStyle = 'pop' | 'funk' | 'reggaeton' | 'lofi'
+export type ProgressionStyle = 'pop' | 'funk' | 'reggaeton' | 'lofi' | 'pagode' | 'samba' | 'funkcarioca'
 
 const STYLE_PROGRESSIONS: Record<ProgressionStyle, number[][]> = {
+  pagode: [[0, 5, 1, 4], [0, 5, 1, 4], [0, 5, 1, 4]],
+  samba: [[0, 5, 1, 4], [0, 5, 1, 4], [0, 5, 1, 4]],
+  funkcarioca: [[5, 3, 4, 5], [5, 3, 4, 5], [5, 3, 4, 5]],
   pop: [[0, 4, 5, 3], [0, 5, 3, 4], [0, 3, 5, 4]],
   lofi: [[1, 4, 0, 5], [1, 4, 0, 0], [1, 4, 5, 0]],
   reggaeton: [[5, 3, 0, 4], [5, 0, 3, 4], [5, 3, 4, 0]],
@@ -121,10 +124,20 @@ export function progression(key: Key, bpm: number, bars: 1 | 2 | 4, style: Progr
   if (!Number.isFinite(bpm) || bpm <= 0) return result
   const variation = ((Math.trunc(Number.isFinite(seed) ? seed : 0) % 3) + 3) % 3
   const degrees = STYLE_PROGRESSIONS[style][variation]
-  const candidates = chordCandidates(KEYS.indexOf(key))
+  const brazilian = style === 'pagode' || style === 'samba'
+  const candidates = chordCandidates(KEYS.indexOf(key)).map((candidate, i) => {
+    if (!brazilian) return candidate
+    const dominant = i === 4 || (style === 'samba' && i === 5)
+    const minor = MINOR[i] && !dominant
+    const seventh = !minor && !dominant ? 11 : 10
+    return { ...candidate,
+      pitches: [candidate.root, (candidate.root + (minor ? 3 : 4)) % 12, (candidate.root + 7) % 12, (candidate.root + seventh) % 12],
+      name: KEYS[candidate.root] + (minor ? 'm7' : dominant ? '7' : 'maj7'),
+    }
+  })
   const seconds = stepDuration(bpm), total = bars * STEPS_PER_BAR
   const length = bars === 1 ? 8 : STEPS_PER_BAR
-  let previous = [60, 64, 67]
+  let previous = brazilian ? [60, 64, 67, 71] : [60, 64, 67]
   for (let step = 0, i = 0; step < total; step += length, i++) {
     const candidate = candidates[degrees[i % degrees.length]]
     const midis = voicing(candidate.pitches, previous)
@@ -133,11 +146,12 @@ export function progression(key: Key, bpm: number, bars: 1 | 2 | 4, style: Progr
     previous = midis
   }
   for (let bar = 0; bar < bars; bar++) {
-    const positions = style === 'funk' ? FUNK_BASS[variation] : style === 'reggaeton' ? [0, 6] : [0, 8]
+    const positions = brazilian ? [0, 14] : style === 'funkcarioca' ? [0, 3, 6, 8, 11, 14] : style === 'funk' ? FUNK_BASS[variation] : style === 'reggaeton' ? [0, 6] : [0, 8]
     positions.forEach((position, i) => {
-      const duration = style === 'lofi' ? 8 : style === 'funk' ? 1 : 4
-      const interval = style === 'lofi' && i === 1 ? 7 : style === 'funk' && (i + variation) % 2 === 1 ? 12 : 0
-      result.bassNotes.push(bassAt(result.chords, candidates, bar * STEPS_PER_BAR + position, duration, seconds, interval))
+      const duration = brazilian ? (i === 0 ? 3 : 2) : style === 'lofi' ? 8 : style === 'funk' || style === 'funkcarioca' ? 1 : 4
+      const interval = (brazilian || style === 'lofi') && i === 1 ? 7 : style === 'funk' && (i + variation) % 2 === 1 ? 12 : 0
+      const note = bassAt(result.chords, candidates, bar * STEPS_PER_BAR + position, duration, seconds, interval)
+      result.bassNotes.push(style === 'funkcarioca' ? { ...note, midi: note.midi - 12 } : note)
     })
   }
   return result

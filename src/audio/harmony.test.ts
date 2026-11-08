@@ -1,3 +1,4 @@
+import { DRUM_PRESETS, toPattern } from '../components/drumPresets'
 import { CHORD_DEGREES, KEYS } from './types'
 import { describe, expect, it, vi } from 'vitest'
 import { accompany, chordPads, progression } from './harmony'
@@ -177,5 +178,59 @@ describe('chordPads', () => {
         if (i) pad.midis.forEach((midi, voice) => expect(Math.abs(midi - pads[i - 1].midis[voice])).toBeLessThanOrEqual(5))
       })
     }
+  })
+})
+
+describe('estilos brasileiros', () => {
+  it.each([
+    ['pagode', ['Cmaj7', 'Am7', 'Dm7', 'G7'], ['Gmaj7', 'Em7', 'Am7', 'D7']],
+    ['samba', ['Cmaj7', 'A7', 'Dm7', 'G7'], ['Gmaj7', 'E7', 'Am7', 'D7']],
+    ['funkcarioca', ['Am', 'F', 'G', 'Am'], ['Em', 'C', 'D', 'Em']],
+  ] as const)('gera graus de %s em C e G', (style, c, g) => {
+    expect(progression('C', 120, 4, style, 0).chords.map(chord => chord.name)).toEqual(c)
+    expect(progression('G', 120, 4, style, 0).chords.map(chord => chord.name)).toEqual(g)
+  })
+  it('pagode e samba usam tetrades completas com conducao suave', () => {
+    for (const key of KEYS) for (const style of ['pagode', 'samba'] as const) for (const bars of [1, 2, 4] as const) {
+      const result = progression(key, 100, bars, style, 0)
+      expect(result.chords).toHaveLength(bars === 1 ? 2 : bars)
+      result.chords.forEach((chord, i) => {
+        expect(chord.midis).toHaveLength(4)
+        expect(new Set(chord.midis.map(midi => midi % 12)).size).toBe(4)
+        if (i) chord.midis.forEach((midi, voice) => expect(Math.abs(midi - result.chords[i - 1].midis[voice])).toBeLessThanOrEqual(5))
+      })
+    }
+  })
+  it.each(['pagode', 'samba'] as const)('%s antecipa quinta no ultimo tempo', style => {
+    const result = progression('C', 120, 4, style, 0)
+    expect(result.bassNotes.slice(0, 2)).toEqual([
+      { time: 0, duration: 0.375, midi: 36 }, { time: 1.75, duration: 0.25, midi: 43 },
+    ])
+    expect(result.bassNotes.map(note => note.time / 0.125)).toEqual([0, 14, 16, 30, 32, 46, 48, 62])
+    expect(progression('C', 120, 4, style, 0)).toEqual(result)
+  })
+  it('funk carioca acompanha 3+3+2 em semicolcheias graves', () => {
+    const result = progression('C', 120, 1, 'funkcarioca', 0)
+    expect(result.bassNotes.map(note => note.time / 0.125)).toEqual([0, 3, 6, 8, 11, 14])
+    expect(result.bassNotes.map(note => note.midi)).toEqual([33, 33, 33, 29, 29, 29])
+    expect(result.bassNotes.every(note => note.duration === 0.125)).toBe(true)
+  })
+  it('presets brasileiros tem oito linhas no kit correto e preservam os legados', () => {
+    for (const [name, kit] of [['Pagode', 'roda'], ['Samba', 'roda'], ['Funk carioca', '808']]) {
+      const preset = DRUM_PRESETS.find(preset => preset.name === name)!
+      expect(preset.kit).toBe(kit)
+      expect(preset.rows).toHaveLength(8)
+      preset.rows.forEach(row => expect(row).toMatch(/^[x.]{16}$/))
+      expect(toPattern(preset)).toHaveLength(8)
+      if (kit === 'roda') {
+        expect(preset.rows[0][4]).toBe('x')
+        expect(preset.rows[0][12]).toBe('x')
+        expect(preset.rows[2]).toBe('xxxxxxxxxxxxxxxx')
+      } else {
+        expect(preset.rows[0]).toBe('x..x..x.x..x..x.')
+        expect(preset.rows[5]).toBe(preset.rows[0])
+      }
+    }
+    expect(DRUM_PRESETS.find(preset => preset.name === 'Pop')!.rows).toHaveLength(4)
   })
 })

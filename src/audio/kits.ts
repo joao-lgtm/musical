@@ -3,7 +3,8 @@ import { playDrum } from './drums'
 import { DRUM_SLOTS } from './types'
 import type { KitId, SlotRole } from './types'
 export type KitVoice = 'kick' | 'snare' | 'hat' | 'clap' | 'openHat' | 'tom' | 'cymbal' | 'shaker' |
-  'kick808' | 'snare808' | 'tom808' | 'cowbell' | 'rimshot'
+  'kick808' | 'snare808' | 'tom808' | 'cowbell' | 'rimshot' |
+  'surdo' | 'repique' | 'pandeiro' | 'tamborim' | 'tanta' | 'agogo' | 'ganza'
 
 const acoustic = [
   { name: 'Bumbo', voice: 'kick', role: 'kick' }, { name: 'Caixa', voice: 'snare', role: 'snare' },
@@ -19,6 +20,12 @@ export const KITS: Record<KitId, { label: string; slots: { name: string; voice: 
     { name: 'Chimbal fechado', voice: 'hat', role: 'hat' }, { name: 'Palmas', voice: 'clap', role: 'perc' },
     { name: 'Chimbal aberto', voice: 'openHat', role: 'hat' }, { name: 'Tom 808', voice: 'tom808', role: 'perc' },
     { name: 'Cowbell', voice: 'cowbell', role: 'perc' }, { name: 'Rimshot', voice: 'rimshot', role: 'perc' },
+  ] },
+  roda: { label: 'Roda', slots: [
+    { name: 'Surdo', voice: 'surdo', role: 'kick' }, { name: 'Caixa de roda/repique', voice: 'repique', role: 'snare' },
+    { name: 'Pandeiro', voice: 'pandeiro', role: 'hat' }, { name: 'Tamborim', voice: 'tamborim', role: 'perc' },
+    { name: 'Tantã', voice: 'tanta', role: 'perc' }, { name: 'Agogô', voice: 'agogo', role: 'perc' },
+    { name: 'Ganzá', voice: 'ganza', role: 'hat' }, { name: 'Palmas', voice: 'clap', role: 'perc' },
   ] },
   lofi: { label: 'Lo-fi', slots: acoustic.map(slot => ({ ...slot })) },
 }
@@ -45,7 +52,7 @@ export function playKitVoice(ctx: BaseAudioContext, dest: AudioNode, kit: KitId,
   velocity = Number.isFinite(velocity) ? Math.max(0, Math.min(1, velocity)) : 0
   if (!velocity || !Number.isInteger(slot) || slot < 0 || slot >= DRUM_SLOTS) return
   const voice = KITS[kit].slots[slot].voice
-  if (kit === 'acoustic' && (voice === 'kick' || voice === 'snare' || voice === 'hat' || voice === 'clap')) {
+  if ((kit === 'acoustic' || kit === 'roda') && (voice === 'kick' || voice === 'snare' || voice === 'hat' || voice === 'clap')) {
     playDrum(ctx, dest, voice, when, velocity)
     return
   }
@@ -76,14 +83,26 @@ export function playKitVoice(ctx: BaseAudioContext, dest: AudioNode, kit: KitId,
     source.buffer = noiseBuffer(ctx)
     fire(source, [filter(type, frequency)], start, peak, decay)
   }
-  function tone(from: number, to: number, sweep: number, peak: number, decay: number, type: OscillatorType = 'sine', band?: number) {
+  function tone(from: number, to: number, sweep: number, peak: number, decay: number, type: OscillatorType = 'sine', band?: number, filterType: BiquadFilterType = 'bandpass') {
     const source = ctx.createOscillator()
     source.type = type
     source.frequency.setValueAtTime(from, when)
     source.frequency.exponentialRampToValueAtTime(to, when + sweep)
-    fire(source, band ? [filter('bandpass', band, 1.5)] : [], when, peak, decay)
+    fire(source, band ? [filter(filterType, band, 1.5)] : [], when, peak, decay)
   }
   switch (voice) {
+    case 'surdo': tone(85, 58, 0.07, 0.95, 0.55, 'sine', 650, 'lowpass'); break
+    case 'repique':
+      noise('highpass', 1500, 0.45, 0.08); tone(330, 260, 0.035, 0.3, 0.09, 'triangle'); break
+    case 'pandeiro':
+      noise('highpass', 6500, 0.3, 0.1); tone(340, 280, 0.025, 0.2, 0.055); break
+    case 'tamborim':
+      tone(850, 780, 0.015, 0.5, 0.06, 'triangle'); noise('bandpass', 2400, 0.15, 0.025); break
+    case 'tanta': tone(115, 90, 0.045, 0.75, 0.18, 'sine', 900, 'lowpass'); break
+    case 'agogo':
+      tone(600, 600, 0.01, 0.23, 0.22, 'triangle', 1200)
+      tone(900, 900, 0.01, 0.2, 0.18, 'triangle', 1500); break
+    case 'ganza': noise('bandpass', 4500, 0.35, 0.11); break
     case 'kick': tone(150, 45, 0.08, 1, 0.45); break
     case 'kick808': tone(160, 42, 0.12, 0.95, 1.2); break
     case 'snare':

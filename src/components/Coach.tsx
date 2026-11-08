@@ -1,3 +1,4 @@
+import { STYLES, getAppliedStyle } from './stylePresets'
 import { KITS } from '../audio/kits'
 import { progression } from '../audio/harmony'
 import type { ProgressionStyle } from '../audio/harmony'
@@ -23,7 +24,7 @@ export function Coach() {
   const [scaleNotice, setScaleNotice] = useState(false)
   const [feedback, setFeedback] = useState('')
   const previousStatus = useRef('empty')
-  const mappedStyle: ProgressionStyle = style === 'Lo-fi' ? 'lofi' : style === 'Funk' ? 'funk' : style === 'Reggaeton' ? 'reggaeton' : 'pop'
+  const mappedStyle: ProgressionStyle = STYLES.find((item) => item.name === style)?.progressionStyle ?? 'pop'
   useEffect(() => {
     setTarget(null)
     setScaleNotice(false)
@@ -64,7 +65,7 @@ export function Coach() {
   const panel = useRef<HTMLDivElement>(null)
   function start() {
     setFeedback('')
-    setStyle(getCoachStyle(engine))
+    setStyle(getAppliedStyle(engine)?.name ?? getCoachStyle(engine))
     if (!state.playing) engine.play()
     setStep(state.pattern.some((row) => row.some(Boolean)) ? -1 : 0)
   }

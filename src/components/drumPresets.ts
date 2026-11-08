@@ -1,12 +1,25 @@
-import type { LoopEngine } from '../audio/types'
+import type { KitId, LoopEngine } from '../audio/types'
 
-// Presets de 1 compasso (16 semicolcheias). 'x' = passo ligado. Ordem: bumbo, caixa, chimbal, palmas.
+// Presets de 1 compasso: 'x' liga o passo. O kit define a ordem das oito pecas.
 export interface DrumPreset {
   name: string
-  rows: [string, string, string, string]
+  kit?: KitId
+  rows: [string, string, string, string] | [string, string, string, string, string, string, string, string]
 }
 
 export const DRUM_PRESETS: readonly DrumPreset[] = [
+  { name: 'Pagode', kit: 'roda', rows: [
+    '....x.......x...', '..x...x...x...x.', 'xxxxxxxxxxxxxxxx', 'x..x..x.x..x..x.',
+    'x.....x.x.....x.', '...x.......x....', 'x.x.x.x.x.x.x.x.', '....x.......x...',
+  ] },
+  { name: 'Samba', kit: 'roda', rows: [
+    '....x.......x...', 'x..x..x.x..x..x.', 'xxxxxxxxxxxxxxxx', '..xx.x..x.xx.x..',
+    '..x...x...x...x.', 'x..x..x...x..x..', '.x.x.x.x.x.x.x.x', '....x.......x...',
+  ] },
+  { name: 'Funk carioca', kit: '808', rows: [
+    'x..x..x.x..x..x.', '....x.......x...', 'x.x.x.x.x.x.x.x.', '....x.......x...',
+    '..............x.', 'x..x..x.x..x..x.', '................', '................',
+  ] },
   { name: 'Pop', rows: ['x.......x.x.....', '....x.......x...', 'x.x.x.x.x.x.x.x.', '............x...'] },
   { name: 'Funk', rows: ['x.x...x...x..x..', '....x..x.x..x...', 'xxxxxxxxxxxxxxxx', '................'] },
   { name: 'Boom bap', rows: ['x......x..x.....', '....x.......x...', 'x.x.x.x.x.x.x.x.', '....x.......x...'] },

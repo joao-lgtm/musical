@@ -15,7 +15,7 @@ function equal(a: unknown, b: unknown): boolean {
 }
 
 export function hasDraftContentChanged(previous: EngineState, next: EngineState): boolean {
-  return previous.kit !== next.kit || previous.scale !== next.scale || previous.key !== next.key || previous.bpm !== next.bpm || previous.bars !== next.bars ||
+  return previous.kit !== next.kit || previous.swing !== next.swing || previous.scale !== next.scale || previous.key !== next.key || previous.bpm !== next.bpm || previous.bars !== next.bars ||
     previous.masterVolume !== next.masterVolume || !equal(previous.pattern, next.pattern) ||
     !equal(previous.tracks.map(content), next.tracks.map(content))
 }
