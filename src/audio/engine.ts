@@ -201,7 +201,7 @@ function gridNotes(input: unknown): GridNote[] | null {
 
 const validSource = (source: unknown): source is TrackSource =>
   source === 'mic' || INSTRUMENTS.includes(source as Instrument)
-const REVERB_DEFAULT: Record<Instrument, number> = { ocarina: 0.2, flute: 0.2, kalimba: 0.15, bass: 0 }
+const REVERB_DEFAULT: Record<Instrument, number> = { ocarina: 0.2, flute: 0.2, kalimba: 0.15, bass: 0, cavaquinho: 0.12 }
 const sourceReverb = (source: TrackSource, reverb: number) =>
   isInstrument(source) && reverb === 0 ? REVERB_DEFAULT[source] : reverb
 
@@ -310,6 +310,7 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
     key: 'C',
     scale: 'pentatonic',
     kit: 'acoustic',
+    swing: 0,
     isolateRecording: false,
     canRestoreTrack: false,
     canUndoBatch: false,
@@ -493,9 +494,10 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
   }
 
   function scheduleDrum(c: BaseAudioContext, dest: AudioNode, s: EngineState, slot: number, absoluteStep: number, time: number, now: number) {
-    if (!s.liveDrums) return playKitVoice(c, dest, s.kit, slot, time)
+    const swung = time + (absoluteStep % 2 !== 0 ? s.swing * stepDuration(s.bpm) : 0)
+    if (!s.liveDrums) return playKitVoice(c, dest, s.kit, slot, Math.max(now, swung))
     const { velocity, offset } = humanize(slotRole(s.kit, slot), absoluteStep, grooveSeed)
-    playKitVoice(c, dest, s.kit, slot, Math.max(now, time + offset), velocity)
+    playKitVoice(c, dest, s.kit, slot, Math.max(now, swung + offset), velocity)
   }
 
   function tick() {
@@ -510,14 +512,15 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
     // bateria a partir de t0 (não toca na contagem)
     const sd = stepDuration(state.bpm)
     const steps = state.bars * STEPS_PER_BAR
-    for (; t0 + nextStep * sd < now + LOOKAHEAD; nextStep++) {
+    const drumTime = (step: number) => t0 + step * sd + (step % 2 !== 0 ? state.swing * sd : 0)
+    for (; drumTime(nextStep) < now + LOOKAHEAD; nextStep++) {
       const t = t0 + nextStep * sd
       const s = nextStep % steps
       drumStep(state, nextStep).forEach((on, v) => {
         const key = `${v}:${s}`
         const skipped = skippedSteps.get(key)
         if (skipped !== undefined && skipped <= nextStep) skippedSteps.delete(key)
-        if (skipped === nextStep || t < now || !drumBus) return
+        if (skipped === nextStep || drumTime(nextStep) < now || !drumBus) return
         if (on) scheduleDrum(c, drumBus, state, v, nextStep, t, now)
       })
     }
@@ -1491,6 +1494,12 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
       if (state.playing) for (const { index } of saved.tracks) startSource(index, ctx!.currentTime + 0.02)
     },
 
+    setSwing(value) {
+      if (!ready()) return
+      const swing = clamp(value, 0, 0.5, state.swing)
+      if (swing !== state.swing) set({ swing })
+    },
+
     setLiveDrums(on) {
       if (ready() && on !== state.liveDrums) set({ liveDrums: on })
     },
@@ -1587,6 +1596,7 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
         key: state.key,
         scale: state.scale,
         kit: state.kit,
+        swing: state.swing,
         sampleRate: sr,
         tracks: state.tracks.map((t, i) => {
           const b = buffers[i]
@@ -1631,6 +1641,7 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
         key: data.key && KEYS.includes(data.key) ? data.key : 'C',
         scale: data.scale && PAD_SCALES.includes(data.scale) ? data.scale : 'pentatonic',
         kit: data.kit && KIT_IDS.includes(data.kit) ? data.kit : 'acoustic',
+        swing: clamp(data.swing, 0, 0.5, 0),
         canRestoreTrack: false,
         tracks,
         pattern,

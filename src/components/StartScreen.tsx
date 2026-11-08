@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { loadDraft } from '../storage/projects'
 import type { ProjectData } from '../audio/types'
 import type { CSSProperties } from 'react'
@@ -11,6 +11,8 @@ import { DEMO_PRESET, toPattern } from './drumPresets'
 
 export function StartScreen({ state }: { state: EngineState }) {
   const engine = useEngine()
+  const [allStyles, setAllStyles] = useState(false)
+  const stylesToggle = useRef<HTMLButtonElement>(null)
   const [draft, setDraft] = useState<ProjectData | null>(null)
   useEffect(() => {
     let mounted = true
@@ -68,8 +70,27 @@ export function StartScreen({ state }: { state: EngineState }) {
           </button>
           <div className="start__styles" role="group" aria-labelledby="style-label">
             <p id="style-label">Ou comece por um estilo:</p>
-            <div>{STYLES.map((style) => <button type="button" className="btn btn--ghost" key={style.name}
-              aria-pressed={false} disabled={busy} onClick={() => start(false, style)}>{style.name}</button>)}</div>
+            <div className="start__featured">
+              {['Pagode', 'Funk carioca', 'Sertanejo', 'Pop'].map((name) => {
+                const style = STYLES.find((item) => item.name === name)
+                return <button type="button" className="btn btn--ghost" key={name} aria-pressed={false}
+                  disabled={busy || !style} title={style ? undefined : 'Em breve'} onClick={() => { if (style) void start(false, style) }}>
+                  {name}{!style && <small>Em breve</small>}
+                </button>
+              })}
+            </div>
+            <button ref={stylesToggle} type="button" className="btn btn--ghost start__all-styles" aria-expanded={allStyles} aria-controls="all-styles"
+              onClick={() => setAllStyles(!allStyles)}>{allStyles ? 'Fechar todos os estilos' : 'Ver todos os estilos'}</button>
+            {allStyles && <div id="all-styles" className="start__style-list" onKeyDown={(e) => {
+              if (e.key === 'Escape') { e.preventDefault(); setAllStyles(false); stylesToggle.current?.focus() }
+            }}>
+              {(['Brasil', 'Mundo'] as const).map((group) => <section key={group} className="start__style-group" aria-label={group}>
+                <h3>{group}</h3><div>{STYLES.filter((style) => style.group === group).map((style) =>
+                  <button type="button" className="btn btn--ghost" key={style.name} aria-pressed={false} disabled={busy}
+                    onClick={() => start(false, style)}>{style.name}</button>)}</div>
+              </section>)}
+            </div>}
+
           </div>
           <p className="start__draft" aria-live="polite">
             {draft ? `${layers} ${layers === 1 ? 'camada' : 'camadas'}, ${draft.bpm} BPM` : ''}

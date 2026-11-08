@@ -1,7 +1,7 @@
 import { openNoteGrid } from './NoteGrid'
 import { useEffect, useRef, useState } from 'react'
 import { bandFromStyle, completeFromTake } from '../audio/transform'
-import type { ProgressionStyle } from '../audio/harmony'
+import { STYLES, rememberStyle } from './stylePresets'
 import type { LoopEngine } from '../audio/types'
 import { useEngine, useEngineState } from '../hooks/useEngine'
 import { DiceIcon } from './Icons'
@@ -27,7 +27,7 @@ export function BatchActions({ track }: { track?: number }) {
     const empty = snapshot.tracks.map((t, i) => t.kind === 'mic' && t.status === 'empty' ? i : -1).filter((i) => i >= 0)
     const unchanged = () => {
       const next = engine.getState()
-      return next.bpm === snapshot.bpm && next.bars === snapshot.bars && next.key === snapshot.key &&
+      return next.bpm === snapshot.bpm && next.bars === snapshot.bars && next.key === snapshot.key && next.kit === snapshot.kit && next.swing === snapshot.swing &&
         next.tracks.length === snapshot.tracks.length && snapshot.tracks.every((t, i) =>
           next.tracks[i].revision === t.revision && next.tracks[i].status === t.status && next.tracks[i].source === t.source)
     }
@@ -51,13 +51,9 @@ export function BatchActions({ track }: { track?: number }) {
         openNoteGrid(engine, a); openNoteGrid(engine, b)
         setMessage(`Pronto: acordes ${result.chords.join(' ')} na faixa ${a + 1} e baixo na faixa ${b + 1}. Desfazer volta tudo.`)
       } else {
-        const styles: { style: ProgressionStyle; drums: string }[] = [
-          { style: 'pop', drums: 'Pop' }, { style: 'funk', drums: 'Funk' },
-          { style: 'reggaeton', drums: 'Reggaeton' }, { style: 'lofi', drums: 'Boom bap' },
-        ]
-        const choice = styles[Math.floor(Math.random() * styles.length)]
+        const choice = STYLES[Math.floor(Math.random() * STYLES.length)]
         const seed = Math.floor(Math.random() * 1000000)
-        const result = await bandFromStyle(snapshot.key, snapshot.bpm, snapshot.bars, choice.style, seed)
+        const result = await bandFromStyle(snapshot.key, snapshot.bpm, snapshot.bars, choice.progressionStyle, seed)
         if (!current()) return
         if (!unchanged()) { setMessage('O projeto mudou durante a geração. Tente de novo.'); return }
         const takes: NonNullable<Parameters<LoopEngine['applyBatch']>[0]['takes']> = []
@@ -65,11 +61,15 @@ export function BatchActions({ track }: { track?: number }) {
           takes.push({ track: empty[0], samples: result.chordsAudio, sampleRate: 48000, source: result.chordInstrument, notes: result.chordNotes })
           takes.push({ track: empty[1], samples: result.bassAudio, sampleRate: 48000, source: 'bass', notes: result.bassNotes })
         } else if (empty.length === 1) takes.push({ track: empty[0], samples: result.bassAudio, sampleRate: 48000, source: 'bass', notes: result.bassNotes })
-        const preset = DRUM_PRESETS.find((p) => p.name === choice.drums)!
+        const preset = DRUM_PRESETS.find((p) => p.name === choice.drums)
+        if (!preset) { setMessage('Este estilo ainda não está disponível. Tente de novo.'); return }
         if (!engine.applyBatch({ takes, pattern: toPattern(preset) })) { setMessage('Não deu para aplicar agora. Tente de novo.'); return }
+        engine.setKit(choice.kit)
+        engine.setSwing(choice.swing)
+        rememberStyle(engine, choice)
         setApplied(true)
         for (const take of takes) openNoteGrid(engine, take.track)
-        setMessage(empty.length >= 2 ? 'Banda pronta: acordes, baixo e bateria.' : empty.length === 1
+        setMessage(empty.length >= 2 ? `Banda no estilo ${choice.name}: acordes, baixo e bateria.` : empty.length === 1
           ? 'Baixo e bateria prontos. Faltou espaço para os acordes.' : 'Bateria pronta. Sem faixas livres para acordes e baixo.')
         window.dispatchEvent(new CustomEvent(BAND_EVENT, { detail: { engine, active: true } }))
         if (!engine.getState().playing) engine.play()

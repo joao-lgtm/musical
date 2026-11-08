@@ -824,3 +824,15 @@ input[type='range']::-moz-range-thumb { width: 16px; height: 24px; border: 0; bo
 .desk[data-studio] .drum-more { display: none; }
 .drum-more { min-height: 44px; }
 .mini { grid-template-rows: repeat(var(--drum-slots, 8), 1fr); gap: 2px; }
+
+/* Estilos Brasil e Mundo */
+.start__featured .btn { display: flex; flex-direction: column; gap: 2px; }
+.start__featured small { font-size: 0.6875rem; }
+.start__all-styles { width: 100%; margin-top: 8px; min-height: 44px; }
+.start__styles .start__style-list { display: block; margin-top: 12px; }
+.start__style-group h3 { margin: 12px 0 8px; font-size: 0.875rem; color: var(--ink-2); }
+.start__style-group > div { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.field--swing { min-width: 120px; }
+.field--swing input { width: 100%; min-height: 44px; }
+.field--swing output { font-variant-numeric: tabular-nums; }
+@media (max-width: 720px) { .field--swing { grid-column: 1 / -1; } }

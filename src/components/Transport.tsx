@@ -71,6 +71,11 @@ export function Transport({ state, studio }: { state: EngineState; studio: boole
         />
       </div>
 
+      {studio && <label className="field field--swing">
+        <span className="field__label">Suingue <output>{Math.round((state.swing ?? 0) * 100)}%</output></span>
+        <input type="range" min="0" max="50" step="1" aria-label="Suingue" aria-valuetext={`${Math.round((state.swing ?? 0) * 100)}%`}
+          value={Math.round((state.swing ?? 0) * 100)} onChange={(e) => engine.setSwing(Number(e.target.value) / 100)} />
+      </label>}
       <fieldset className="field field--bars" disabled={locked} aria-describedby={locked ? 'lock-note' : undefined}>
         <legend className="field__label">Compassos {locked && <LockIcon size={12} />}</legend>
         <div className="seg">

@@ -19,6 +19,7 @@ interface Partial {
 }
 interface Preset {
   partials: Partial[]
+  sampled?: boolean
   attack: number
   release: number
   level: number
@@ -30,6 +31,9 @@ interface Preset {
   vibrato?: { delay: number; full: number; depth: number }
 }
 const PRESETS: Record<Instrument, Preset> = {
+  cavaquinho: {
+    partials: [], sampled: true, attack: 0.001, release: 0.08, level: 0.22, cutoff: 9000,
+  },
   ocarina: {
     partials: [{ ratio: 1, level: 1 }, { ratio: 2, level: 0.02 }, { ratio: 3, level: 0.04 }, { ratio: 1, level: 0.1, cents: 4 }],
     attack: 0.03, release: 0.09, level: 0.2, cutoff: 3500, glide: 25,
@@ -66,6 +70,48 @@ function breath(ctx: BaseAudioContext) {
   return buffer
 }
 
+const stringCache = new Map<string, AudioBuffer>()
+
+function pluckedString(ctx: BaseAudioContext, midi: number): AudioBuffer {
+  const key = `${ctx.sampleRate}:${midi}`
+  const cached = stringCache.get(key)
+  if (cached) return cached
+  const rate = ctx.sampleRate
+  const buffer = ctx.createBuffer(1, Math.ceil(rate * 1.2), rate)
+  const data = buffer.getChannelData(0)
+  const delay = Math.max(2, rate / midiToHz(midi) - 0.5)
+  const ring = new Float32Array(Math.ceil(delay) + 1)
+  let previous = Math.random() * 2 - 1
+  let mean = 0
+  for (let i = 0; i < ring.length; i++) {
+    const noise = Math.random() * 2 - 1
+    ring[i] = (previous + noise) * 0.5
+    previous = noise
+    mean += ring[i]
+  }
+  mean /= ring.length
+  for (let i = 0; i < ring.length; i++) ring[i] -= mean
+  let write = 0, last = 0, peak = 0
+  for (let i = 0; i < data.length; i++) {
+    const read = (write - delay + ring.length) % ring.length
+    const index = Math.floor(read)
+    const fraction = read - index
+    const value = ring[index] * (1 - fraction) + ring[(index + 1) % ring.length] * fraction
+    // Media no loop KS; meio frame compensado no atraso para preservar a afinacao.
+    ring[write] = 0.99 * (value + last) * 0.5
+    last = value
+    write = (write + 1) % ring.length
+    const pick = i < rate * 0.004 ? (Math.random() * 2 - 1) * 0.15 * Math.exp(-i / (rate * 0.001)) : 0
+    const fade = Math.min(1, i / (rate * 0.0007), (data.length - 1 - i) / (rate * 0.02))
+    data[i] = (value + pick) * fade
+    peak = Math.max(peak, Math.abs(data[i]))
+  }
+  if (peak > 0) for (let i = 0; i < data.length; i++) data[i] *= 0.9 / peak
+  if (stringCache.size >= 128) stringCache.delete(stringCache.keys().next().value!)
+  stringCache.set(key, buffer)
+  return buffer
+}
+
 /** Janela finita: reserva o release antes do fim do loop, sem dar a volta. */
 export function noteWindow(note: Note, loopDuration: number, instrument: Instrument = 'ocarina') {
   const preset = PRESETS[instrument]
@@ -85,7 +131,14 @@ export function startVoice(ctx: BaseAudioContext, dest: AudioNode, midi: number,
   const gains = preset.partials.slice(1).map(() => ctx.createGain())
   const sources: (OscillatorNode | AudioBufferSourceNode)[] = [...tones]
   const nodes: AudioNode[] = [...tones, ...gains]
-  const inputs: AudioNode[] = [tones[0]]
+  const inputs: AudioNode[] = tones.length ? [tones[0]] : []
+  if (preset.sampled) {
+    const string = ctx.createBufferSource()
+    string.buffer = pluckedString(ctx, midi)
+    inputs.push(string)
+    sources.push(string)
+    nodes.push(string)
+  }
   tones.forEach((tone, i) => {
     const partial = preset.partials[i]
     tone.type = 'sine'

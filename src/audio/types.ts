@@ -16,13 +16,13 @@ export type TrackKind = 'mic' | 'drums'
 export type TrackSource = 'mic' | Instrument
 
 /** Instrumentos sintetizados (synth.ts), tocados pelos pads ou gerados por "Transformar". */
-export type Instrument = 'ocarina' | 'flute' | 'kalimba' | 'bass'
-export const INSTRUMENTS: readonly Instrument[] = ['ocarina', 'flute', 'kalimba', 'bass']
+export type Instrument = 'ocarina' | 'flute' | 'kalimba' | 'bass' | 'cavaquinho'
+export const INSTRUMENTS: readonly Instrument[] = ['ocarina', 'flute', 'kalimba', 'bass', 'cavaquinho']
 export const isInstrument = (source: TrackSource): source is Instrument => source !== 'mic'
 /** Oitava da tônica no pad 0 de cada instrumento (C4 = 60). */
-export const INSTRUMENT_OCTAVE: Readonly<Record<Instrument, number>> = { ocarina: 4, flute: 5, kalimba: 4, bass: 2 }
+export const INSTRUMENT_OCTAVE: Readonly<Record<Instrument, number>> = { ocarina: 4, flute: 5, kalimba: 4, bass: 2, cavaquinho: 4 }
 /** Nome exibido. */
-export const INSTRUMENT_LABEL: Readonly<Record<Instrument, string>> = { ocarina: 'Ocarina', flute: 'Flauta', kalimba: 'Kalimba', bass: 'Baixo' }
+export const INSTRUMENT_LABEL: Readonly<Record<Instrument, string>> = { ocarina: 'Ocarina', flute: 'Flauta', kalimba: 'Kalimba', bass: 'Baixo', cavaquinho: 'Cavaquinho' }
 
 /** Tom do projeto; os instrumentos usam a pentatônica maior desse tom (ver scale.ts). */
 export type Key = 'C' | 'C#' | 'D' | 'D#' | 'E' | 'F' | 'F#' | 'G' | 'G#' | 'A' | 'A#' | 'B'
@@ -95,8 +95,8 @@ export const DRUM_VOICES: readonly DrumVoice[] = ['kick', 'snare', 'hat', 'clap'
 /** Posições da bateria: o padrão tem sempre DRUM_SLOTS linhas; cada kit define o que soa em cada uma. */
 export const DRUM_SLOTS = 8
 /** Kits de bateria (kits.ts define nome e síntese de cada slot). */
-export type KitId = 'acoustic' | '808' | 'lofi'
-export const KIT_IDS: readonly KitId[] = ['acoustic', '808', 'lofi']
+export type KitId = 'acoustic' | '808' | 'lofi' | 'roda'
+export const KIT_IDS: readonly KitId[] = ['acoustic', '808', 'lofi', 'roda']
 /** Papel rítmico de um slot, usado por viradas/humanização e pelo coach: kick, snare, hat ou percussão. */
 export type SlotRole = 'kick' | 'snare' | 'hat' | 'perc'
 /** 16 passos (semicolcheias) por compasso. */
@@ -135,6 +135,8 @@ export interface EngineState {
   readonly key: Key // padrão 'C'
   readonly scale: PadScale // padrão 'pentatonic'
   readonly kit: KitId // padrão 'acoustic'
+  /** Suingue 0..0.5: atraso das semicolcheias de contratempo (passos ímpares) em fração de semicolcheia. 0 = reto. Vale para bateria, metrônomo não, render sim. */
+  readonly swing: number
   /** Enquanto um canal mic está armado/gravando, só ele (e metrônomo/contagem) soa na monitoração; os outros canais e a bateria ficam mudos. Não afeta renderMix/exportação. */
   readonly isolateRecording: boolean
   /** Há uma faixa removida que restoreTrack() pode recolocar (1 nível). */
@@ -173,6 +175,8 @@ export interface ProjectData {
   scale?: PadScale
   /** Ausente em projetos antigos → 'acoustic'. */
   kit?: KitId
+  /** Ausente em projetos antigos → 0. */
+  swing?: number
   sampleRate: number
   /** `source` ausente em projetos antigos → 'mic'. */
   tracks: (Omit<TrackParams, 'source' | 'padMode'> & { source?: TrackSource; padMode?: PadMode; audio: Float32Array | null; notes?: GridNote[] })[]
@@ -245,6 +249,8 @@ export interface LoopEngine {
   setScale(scale: PadScale): void
   /** Troca o kit: o padrão continua igual, só o som de cada slot muda. */
   setKit(kit: KitId): void
+  /** Suingue 0..0.5 (limitado). */
+  setSwing(swing: number): void
   /**
    * Toca/solta uma nota do instrumento do canal (grau 0..PAD_COUNT[state.scale]-1 de padNotes(state.key, state.scale, INSTRUMENT_OCTAVE[source])).
    * Com padMode 'chords': i em 0..CHORD_DEGREES.length-1 toca/solta a tríade inteira (chordPads de harmony.ts), contando como 3 vozes; no take viram 3 GridNotes.

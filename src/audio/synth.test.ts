@@ -47,11 +47,13 @@ function context() {
     nodes.push(result)
     return result
   }
-  const samples = new Float32Array(100)
   const ctx = {
     currentTime: 0, sampleRate: 48000, destination: node(),
     createOscillator: vi.fn(node), createGain: vi.fn(node), createBiquadFilter: vi.fn(node), createBufferSource: vi.fn(node),
-    createBuffer: vi.fn(() => ({ getChannelData: () => samples })),
+    createBuffer: vi.fn((channels: number, length: number, sampleRate: number) => {
+      const samples = new Float32Array(length)
+      return { length, sampleRate, numberOfChannels: channels, getChannelData: () => samples }
+    }),
     startRendering: vi.fn().mockResolvedValue({ rendered: true }),
   }
   return { ctx, nodes }
@@ -336,5 +338,96 @@ describe('presets de instrumento', () => {
       }
     })
     expect(graphs[0]).toEqual(graphs[1])
+  })
+})
+
+
+describe('cavaquinho Karplus-Strong', () => {
+  afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks() })
+
+  it('gera corda finita de 1.2s, com pico controlado e energia decrescente', () => {
+    let seed = 21
+    vi.spyOn(Math, 'random').mockImplementation(() => {
+      seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0
+      return seed / 2 ** 32
+    })
+    const { ctx } = context()
+    startVoice(ctx as unknown as BaseAudioContext, ctx.destination as unknown as AudioNode, 77, 0, 'cavaquinho')
+    expect(ctx.createOscillator).not.toHaveBeenCalled()
+    const source = ctx.createBufferSource.mock.results[0].value
+    const buffer = source.buffer!
+    expect(buffer.length).toBe(57600)
+    expect(buffer.sampleRate).toBe(48000)
+    expect(buffer.numberOfChannels).toBe(1)
+    const samples: Float32Array = buffer.getChannelData(0)
+    const rms = (start: number, end: number) => {
+      const slice = samples.subarray(Math.round(start * 48000), Math.round(end * 48000))
+      return Math.sqrt(slice.reduce((sum, value) => sum + value * value, 0) / slice.length)
+    }
+    const head = rms(0.01, 0.1), middle = rms(0.5, 0.6), tail = rms(1, 1.1)
+    expect(head).toBeGreaterThan(0.01)
+    expect(middle).toBeLessThan(head * 0.5)
+    expect(tail).toBeLessThan(middle * 0.5)
+    expect(samples.every(Number.isFinite)).toBe(true)
+    expect(Math.abs(samples[0])).toBe(0)
+    expect(Math.abs(samples.at(-1)!)).toBe(0)
+    let peak = 0
+    for (const value of samples) peak = Math.max(peak, Math.abs(value))
+    expect(peak).toBeCloseTo(0.9)
+    expect(4 * peak * 0.22).toBeLessThan(1)
+    expect(source.loop).toBe(false)
+  })
+
+  it('reutiliza o buffer por MIDI/sampleRate inclusive entre contextos', () => {
+    const first = context(), second = context()
+    const play = (ctx: ReturnType<typeof context>['ctx'], midi: number) => {
+      startVoice(ctx as unknown as BaseAudioContext, ctx.destination as unknown as AudioNode, midi, 0, 'cavaquinho')
+      return ctx.createBufferSource.mock.results.at(-1)!.value.buffer
+    }
+    const buffer = play(first.ctx, 78)
+    expect(play(first.ctx, 78)).toBe(buffer)
+    expect(play(second.ctx, 78)).toBe(buffer)
+    expect(second.ctx.createBuffer).not.toHaveBeenCalled()
+    expect(play(second.ctx, 79)).not.toBe(buffer)
+    second.ctx.sampleRate = 44100
+    const otherRate = play(second.ctx, 78)!
+    expect(otherRate).not.toBe(buffer)
+    expect(otherRate.length).toBe(Math.ceil(44100 * 1.2))
+    expect(otherRate.sampleRate).toBe(44100)
+  })
+
+  it('noteOff abafa em 80ms respeitando 90ms e corte forcado pode antecipar a cauda', () => {
+    const { ctx, nodes } = context()
+    const voice = startVoice(ctx as unknown as BaseAudioContext, ctx.destination as unknown as AudioNode, 80, 0, 'cavaquinho')
+    const source = ctx.createBufferSource.mock.results[0].value
+    const envelope = ctx.createGain.mock.results[0].value
+    expect(envelope.gain.linearRampToValueAtTime).toHaveBeenCalledWith(0.22, 0.001)
+    expect(source.connect).toHaveBeenCalledWith(envelope)
+    voice.stop(0)
+    expect(envelope.gain.setValueAtTime).toHaveBeenLastCalledWith(0.22, 0.09)
+    expect(envelope.gain.linearRampToValueAtTime).toHaveBeenLastCalledWith(0, 0.09 + 0.08)
+    expect(source.stop).toHaveBeenLastCalledWith(0.09 + 0.08)
+    voice.stop(0.1, 0.01)
+    expect(source.stop).toHaveBeenLastCalledWith(0.11)
+    const ended = vi.fn()
+    voice.onEnded(ended)
+    source.onended!()
+    expect(ended).toHaveBeenCalledOnce()
+    for (const node of nodes.slice(1)) expect(node.disconnect).toHaveBeenCalledOnce()
+  })
+
+  it('render offline toca cavaquinho e recorta noteOff mais release no loop', async () => {
+    const { ctx } = context()
+    const Offline = vi.fn(function () { return ctx })
+    vi.stubGlobal('OfflineAudioContext', Offline)
+    await renderNotes([{ time: 0.2, duration: 0.3, midi: 81 }], 2, 48000, 'cavaquinho')
+    expect(Offline).toHaveBeenCalledWith(1, 96000, 48000)
+    expect(ctx.createOscillator).not.toHaveBeenCalled()
+    expect(ctx.createBufferSource).toHaveBeenCalledOnce()
+    const source = ctx.createBufferSource.mock.results[0].value
+    expect(source.buffer).not.toBeNull()
+    expect(source.start).toHaveBeenCalledWith(0.2)
+    expect(source.stop.mock.calls.at(-1)![0]).toBeCloseTo(0.58)
+    expect(ctx.startRendering).toHaveBeenCalledOnce()
   })
 })

@@ -41,14 +41,14 @@ describe('kits', () => {
   it('expoe os papeis de cada slot pelo contrato compartilhado', () => {
     const acousticRoles = ['kick', 'snare', 'hat', 'perc', 'hat', 'perc', 'perc', 'hat']
     for (const kit of KIT_IDS) {
-      const expected = kit === '808' ? [...acousticRoles.slice(0, 7), 'perc'] : acousticRoles
+      const expected = kit === 'roda' ? ['kick', 'snare', 'hat', 'perc', 'perc', 'perc', 'hat', 'perc'] : kit === '808' ? [...acousticRoles.slice(0, 7), 'perc'] : acousticRoles
       expect(KITS[kit].slots.map(slot => slot.role)).toEqual(expected)
       expect(Array.from({ length: DRUM_SLOTS }, (_, slot) => slotRole(kit, slot))).toEqual(expected)
     }
     expect(slotRole('acoustic', -1)).toBe('perc')
     expect(slotRole('808', 8)).toBe('perc')
   })
-  it.each(['acoustic', '808', 'lofi'] as const)('%s tem oito slots que agendam e limpam todos os nos', kit => {
+  it.each(['acoustic', '808', 'lofi', 'roda'] as const)('%s tem oito slots que agendam e limpam todos os nos', kit => {
     expect(KITS[kit].slots).toHaveLength(DRUM_SLOTS)
     for (let slot = 0; slot < DRUM_SLOTS; slot++) {
       const { ctx, nodes, dest } = context()
@@ -73,7 +73,7 @@ describe('kits', () => {
       expect(signature(a.nodes)).toEqual(signature(b.nodes))
     }
   })
-  it.each(['acoustic', '808', 'lofi'] as const)('%s escala velocity sem alterar tempos', kit => {
+  it.each(['acoustic', '808', 'lofi', 'roda'] as const)('%s escala velocity sem alterar tempos', kit => {
     for (let slot = 0; slot < DRUM_SLOTS; slot++) {
       const a = context(), b = context()
       playKitVoice(a.ctx, a.dest, kit, slot, 1, 1)
@@ -110,6 +110,27 @@ describe('kits', () => {
         expect(Math.max(...node.curve!)).toBeLessThanOrEqual(1)
       })
     }
+  })
+  it('roda tem as oito pecas e distingue surdo, tanta, pele/platinelas e campanulas', () => {
+    expect(KITS.roda.slots.map(slot => slot.name)).toEqual(['Surdo', 'Caixa de roda/repique', 'Pandeiro', 'Tamborim', 'Tantã', 'Agogô', 'Ganzá', 'Palmas'])
+    const surdo = context(), tanta = context(), agogo = context(), pandeiro = context()
+    playKitVoice(surdo.ctx, surdo.dest, 'roda', 0, 1)
+    playKitVoice(tanta.ctx, tanta.dest, 'roda', 4, 1)
+    expect(surdo.nodes[0].frequency.exponentialRampToValueAtTime).toHaveBeenCalledWith(58, 1.07)
+    expect(tanta.nodes[0].frequency.exponentialRampToValueAtTime).toHaveBeenCalledWith(90, 1.045)
+    expect(surdo.nodes[0].stop.mock.calls[0][0]).toBeGreaterThan(tanta.nodes[0].stop.mock.calls[0][0])
+    expect(surdo.nodes.some(node => node.kind === 'filter' && node.type === 'lowpass')).toBe(true)
+    playKitVoice(pandeiro.ctx, pandeiro.dest, 'roda', 2, 1)
+    expect(pandeiro.nodes.some(node => node.kind === 'noise')).toBe(true)
+    expect(pandeiro.nodes.some(node => node.kind === 'oscillator')).toBe(true)
+    playKitVoice(agogo.ctx, agogo.dest, 'roda', 5, 1)
+    expect(agogo.nodes.filter(node => node.kind === 'oscillator').map(node => node.frequency.setValueAtTime.mock.calls[0][0])).toEqual([600, 900])
+  })
+  it('palmas da roda reaproveitam playDrum', () => {
+    const a = context(), b = context()
+    playKitVoice(a.ctx, a.dest, 'roda', 7, 1, 0.7)
+    playDrum(b.ctx, b.dest, 'clap', 1, 0.7)
+    expect(signature(a.nodes)).toEqual(signature(b.nodes))
   })
   it('agenda as caudas longas e a cowbell de duas quadradas', () => {
     const cymbal = context(), openHat = context(), kick = context(), bell = context()

@@ -7,7 +7,7 @@ function state(): EngineState {
   return {
     status: 'ready', error: null, mic: 'off', micError: null, micTrack: null,
     bpm: 120, bars: 1, metronome: false, latencyOffset: 0, playing: false,
-    loopDuration: 2, masterVolume: 1, key: 'C', scale: 'pentatonic', kit: 'acoustic',
+    loopDuration: 2, masterVolume: 1, key: 'C', scale: 'pentatonic', kit: 'acoustic', swing: 0,
     isolateRecording: false, canRestoreTrack: false, canUndoBatch: false, liveDrums: true,
     pattern: Array.from({ length: DRUM_SLOTS }, () => Array<boolean>(16).fill(false)),
     tracks: [{
@@ -65,6 +65,8 @@ describe('hasDraftContentChanged', () => {
     expect(hasDraftContentChanged(base, next)).toBe(true)
     expect(observeDraft(createDraftProgress(base), next).dirty).toBe(true)
     expect(hasDraftContentChanged(base, { ...base, kit: 'acoustic' })).toBe(false)
+    expect(hasDraftContentChanged(base, { ...base, swing: 0.12 })).toBe(true)
+    expect(hasDraftContentChanged(base, { ...base, swing: 0 })).toBe(false)
   })
 
   it('detecta mudanca do tom do projeto', () => {
