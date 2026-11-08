@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } fr
 import { createEngine } from './engine'
 import * as synth from './synth'
 import * as drums from './drums'
+import * as kits from './kits'
 import * as groove from './groove'
 import { INSTRUMENTS } from './types'
 
@@ -118,7 +119,7 @@ describe('audio sem permissao de microfone', () => {
     expect(engine.init()).toBe(first)
     await first
     expect(engine.getState()).toMatchObject({ status: 'ready', mic: 'off', micError: null, micTrack: null })
-    engine.triggerDrum('kick')
+    engine.triggerDrum(0)
     engine.toggleStep(0, 0)
     engine.play()
     expect(engine.getState().playing).toBe(true)
@@ -379,6 +380,118 @@ describe('audio sem permissao de microfone', () => {
     expect(master.linearRampToValueAtTime).not.toHaveBeenCalled()
   })
 
+  describe('kits e oito slots', () => {
+    it('estado inicial, setPattern e applyBatch normalizam quatro ou mais linhas para oito', async () => {
+      await engine.init()
+      expect(engine.getState().kit).toBe('acoustic')
+      expect(engine.getState().pattern).toHaveLength(8)
+      const four = Array.from({ length: 4 }, (_, i) => [i === 0, i === 1])
+      engine.setPattern(four)
+      expect(engine.getState().pattern.slice(4).every((row) => row.every((on) => !on))).toBe(true)
+      expect(engine.getState().pattern[0].slice(0, 4)).toEqual([true, false, true, false])
+      engine.applyBatch({ pattern: four })
+      expect(engine.getState().pattern).toHaveLength(8)
+      expect(engine.getState().pattern.slice(4).every((row) => row.every((on) => !on))).toBe(true)
+      engine.setPattern(Array.from({ length: 10 }, () => [true]))
+      expect(engine.getState().pattern).toHaveLength(8)
+      engine.setBars(1)
+      expect(engine.getState().pattern.every((row) => row.length === 16)).toBe(true)
+    })
+
+    it('migra projeto antigo de quatro linhas e valida kit salvo', async () => {
+      await engine.init()
+      const project = engine.exportProject()
+      project.pattern = [[true], [false], [true], [false]]
+      delete project.kit
+      engine.setKit('808')
+      engine.importProject(project)
+      expect(engine.getState().kit).toBe('acoustic')
+      expect(engine.getState().pattern).toHaveLength(8)
+      expect(engine.getState().pattern.slice(4).every((row) => row.every((on) => !on))).toBe(true)
+      project.kit = '808'
+      engine.importProject(project)
+      expect(engine.exportProject().kit).toBe('808')
+      Object.assign(project, { kit: 'invalido' })
+      engine.importProject(project)
+      expect(engine.getState().kit).toBe('acoustic')
+    })
+
+    it('troca kit sem mudar padrao e slots altos definem status recorded', async () => {
+      await engine.init()
+      engine.toggleStep(7, 0)
+      const pattern = engine.getState().pattern
+      expect(engine.getState().tracks[2].status).toBe('recorded')
+      engine.setKit('lofi')
+      expect(engine.getState().pattern).toBe(pattern)
+      expect(engine.exportProject().kit).toBe('lofi')
+      engine.setKit('invalido' as never)
+      expect(engine.getState().kit).toBe('lofi')
+      engine.toggleStep(7, 0)
+      expect(engine.getState().tracks[2].status).toBe('empty')
+      const before = engine.getState()
+      engine.toggleStep(8, 0)
+      expect(engine.getState()).toBe(before)
+    })
+
+    it('triggerDrum toca slot 7 e ignora indices invalidos', async () => {
+      await engine.init()
+      engine.setKit('808')
+      const play = vi.spyOn(kits, 'playKitVoice').mockImplementation(() => {})
+      engine.triggerDrum(7)
+      expect(play.mock.calls[0].slice(2)).toEqual(['808', 7, 0])
+      for (const slot of [-1, 8, 1.5, NaN]) engine.triggerDrum(slot)
+      expect(play).toHaveBeenCalledTimes(1)
+    })
+
+    it('slot 5 acustico toca o tom e slots 0..3 delegam as vozes antigas', async () => {
+      await engine.init()
+      const osc = vi.spyOn(TestContext.instances[0], 'createOscillator')
+      engine.triggerDrum(5)
+      expect(osc.mock.results[0].value.frequency.setValueAtTime).toHaveBeenCalledWith(190, 0)
+      expect(osc.mock.results[0].value.frequency.exponentialRampToValueAtTime).toHaveBeenCalledWith(120, 0.08)
+      const play = vi.spyOn(drums, 'playDrum').mockImplementation(() => {})
+      for (let slot = 0; slot < 4; slot++) engine.triggerDrum(slot)
+      expect(play.mock.calls.map((call) => call.slice(2))).toEqual([
+        ['kick', 0, 1], ['snare', 0, 1], ['hat', 0, 1], ['clap', 0, 1],
+      ])
+    })
+
+    it('scheduler usa slotRole para humanizar e kit atual para tocar slot alto', async () => {
+      await engine.init()
+      engine.setKit('808')
+      engine.setMetronome(false)
+      engine.toggleStep(7, 0)
+      const play = vi.spyOn(kits, 'playKitVoice').mockImplementation(() => {})
+      const human = vi.spyOn(groove, 'humanize').mockReturnValue({ velocity: 0.6, offset: 0.003 })
+      engine.play()
+      expect(human.mock.calls[0][0]).toBe(kits.slotRole('808', 7))
+      expect(human.mock.calls[0][1]).toBe(0)
+      expect(play.mock.calls[0][2]).toBe('808')
+      expect(play.mock.calls[0][3]).toBe(7)
+      expect(play.mock.calls[0][4]).toBeCloseTo(0.053)
+      expect(play.mock.calls[0][5]).toBe(0.6)
+    })
+
+    it('render offline usa kit 808 e preserva slots 5/7', async () => {
+      await engine.init()
+      engine.setKit('808')
+      engine.setLiveDrums(false)
+      engine.toggleStep(5, 0)
+      engine.toggleStep(7, 1)
+      class Offline extends TestContext {
+        channels: number
+        length: number
+        constructor(channels: number, length: number, rate: number) { super(); this.channels = channels; this.length = length; this.sampleRate = rate }
+        async startRendering() { return new TestBuffer({ numberOfChannels: this.channels, length: this.length, sampleRate: this.sampleRate }) }
+      }
+      vi.stubGlobal('OfflineAudioContext', Offline)
+      const play = vi.spyOn(kits, 'playKitVoice').mockImplementation(() => {})
+      await engine.renderMix(1)
+      expect(play.mock.calls.every((call) => call[2] === '808')).toBe(true)
+      expect(new Set(play.mock.calls.map((call) => call[3]))).toEqual(new Set([5, 7]))
+    })
+  })
+
   describe('bateria viva', () => {
     it('aplica velocity e offset, limita no now e mantem seed da sessao', async () => {
       await engine.init()
@@ -407,7 +520,7 @@ describe('audio sem permissao de microfone', () => {
       engine.setMetronome(false)
       engine.setPattern([[]])
       const pattern = engine.getState().pattern
-      const play = vi.spyOn(drums, 'playDrum').mockImplementation(() => {})
+      const play = vi.spyOn(kits, 'playKitVoice').mockImplementation(() => {})
       vi.spyOn(groove, 'humanize').mockReturnValue({ velocity: 1, offset: 0 })
       engine.play()
       const ctx = TestContext.instances[0]
@@ -415,9 +528,9 @@ describe('audio sem permissao de microfone', () => {
         ctx.currentTime = 0.05 + step * 0.125 - 0.001
         vi.advanceTimersByTime(25)
       }
-      const hits = play.mock.calls.map((call) => Math.round((call[3] - 0.05) / 0.125))
+      const hits = play.mock.calls.map((call) => Math.round((call[4] - 0.05) / 0.125))
       expect(hits).toEqual([56, 58, 60, 61, 62, 63, 120, 122, 124, 125, 126, 127])
-      expect(play.mock.calls.every((call) => call[2] === 'snare')).toBe(true)
+      expect(play.mock.calls.map((call) => call[3])).toEqual([1, 1, 1, 5, 5, 5, 1, 1, 1, 5, 5, 5])
       expect(engine.getState().pattern).toBe(pattern)
     })
 
@@ -430,7 +543,7 @@ describe('audio sem permissao de microfone', () => {
       const human = vi.spyOn(groove, 'humanize')
       const fill = vi.spyOn(groove, 'fillPattern')
       engine.play()
-      expect(play.mock.calls[0].slice(2)).toEqual(['kick', 0.05])
+      expect(play.mock.calls[0].slice(2)).toEqual(['kick', 0.05, 1])
       expect(human).not.toHaveBeenCalled()
       expect(fill).not.toHaveBeenCalled()
     })
@@ -447,7 +560,7 @@ describe('audio sem permissao de microfone', () => {
       }
       vi.stubGlobal('OfflineAudioContext', Offline)
       engine.setPattern([[true, false]])
-      const play = vi.spyOn(drums, 'playDrum').mockImplementation(() => {})
+      const play = vi.spyOn(kits, 'playKitVoice').mockImplementation(() => {})
       const human = vi.spyOn(groove, 'humanize').mockReturnValue({ velocity: 0.6, offset: 0.003 })
       engine.play()
       const seed = human.mock.calls[0][2]
@@ -455,17 +568,17 @@ describe('audio sem permissao de microfone', () => {
       play.mockClear()
       human.mockClear()
       await engine.renderMix(4)
-      const snare = play.mock.calls.filter((call) => call[2] === 'snare')
+      const fill = play.mock.calls.filter((call) => call[3] === 1 || call[3] === 5)
       // 2 loops de pre-roll (4s), virada na barra 3: passo absoluto 56 em 7s.
-      expect(snare.map((call) => call[3])).toEqual([11.003, 11.253, 11.503, 11.628, 11.753, 11.878])
-      expect(snare.every((call) => call[4] === 0.6)).toBe(true)
+      expect(fill.map((call) => call[4])).toEqual([11.003, 11.253, 11.503, 11.628, 11.753, 11.878])
+      expect(fill.every((call) => call[5] === 0.6)).toBe(true)
       expect(human.mock.calls.every((call) => call[2] === seed)).toBe(true)
       expect(human.mock.calls.some((call) => call[1] === 56)).toBe(true)
       engine.setLiveDrums(false)
       play.mockClear()
       human.mockClear()
       await engine.renderMix(4)
-      expect(play.mock.calls.some((call) => call[2] === 'snare')).toBe(false)
+      expect(play.mock.calls.some((call) => call[3] === 1 || call[3] === 5)).toBe(false)
       expect(human).not.toHaveBeenCalled()
     })
   })

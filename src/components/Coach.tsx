@@ -1,3 +1,4 @@
+import { KITS } from '../audio/kits'
 import { progression } from '../audio/harmony'
 import type { ProgressionStyle } from '../audio/harmony'
 import { padNotes } from '../audio/scale'
@@ -70,10 +71,11 @@ export function Coach() {
   function exit() { setStep(null); startButton.current?.focus() }
   useEffect(() => {
     if (step === null || step < 0 || step > 2) return
-    const row = state.pattern[step]
+    const slot = KITS[state.kit ?? 'acoustic'].slots.findIndex((part) => 'role' in part && part.role === ['kick', 'snare', 'hat'][step])
+    const row = state.pattern[slot < 0 ? step : slot]
     const targets = row?.map((_, i) => i).filter((i) => step === 0 ? i % 16 === 0 || i % 16 === 8 : step === 1 ? i % 16 === 4 || i % 16 === 12 : i % 2 === 0)
     if (targets?.length && targets.every((i) => row[i])) setStep(step + 1)
-  }, [step, state.pattern])
+  }, [step, state.pattern, state.kit])
   // o play só acontece no gesto de abrir o coach; se a pessoa parar, ela decide quando voltar
   useLayoutEffect(() => {
     if (step !== null && (document.activeElement === document.body || panel.current?.contains(document.activeElement) || document.activeElement === startButton.current)) panel.current?.focus({ preventScroll: true })

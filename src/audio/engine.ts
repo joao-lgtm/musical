@@ -1,5 +1,5 @@
-import type { CalibrationResult, DrumVoice, EngineState, GridNote, Instrument, LoopEngine, Position, ProjectData, TrackParams, TrackSource, TrackState } from './types'
-import { CHORD_DEGREES, DRUM_VOICES, INSTRUMENTS, INSTRUMENT_OCTAVE, isInstrument, KEYS, PAD_COUNT, PAD_SCALES, STEPS_PER_BAR } from './types'
+import type { CalibrationResult, EngineState, GridNote, Instrument, LoopEngine, Position, ProjectData, TrackParams, TrackSource, TrackState } from './types'
+import { CHORD_DEGREES, DRUM_SLOTS, INSTRUMENTS, INSTRUMENT_OCTAVE, isInstrument, KEYS, KIT_IDS, PAD_COUNT, PAD_SCALES, STEPS_PER_BAR } from './types'
 import {
   beatDuration,
   calibrationPlan,
@@ -25,7 +25,7 @@ import {
   timeToFrame,
   vuLevel,
 } from './timing'
-import { playDrum } from './drums'
+import { playKitVoice, slotRole } from './kits'
 import { fillPattern, humanize, isFillBar } from './groove'
 import { isSilent } from './silence'
 import { padNotes } from './scale'
@@ -227,7 +227,9 @@ function mergeParams(cur: TrackState, p: Partial<TrackParams>, defaultName: stri
 }
 
 const hasSteps = (p: readonly (readonly boolean[])[]) => p.some((row) => row.some(Boolean))
-const emptyPattern = (bars: number) => DRUM_VOICES.map(() => Array<boolean>(bars * STEPS_PER_BAR).fill(false))
+const normalizePattern = (pattern: readonly (readonly boolean[])[], steps: number) =>
+  resizePattern(Array.from({ length: DRUM_SLOTS }, (_, slot) => pattern[slot] ?? []), steps)
+const emptyPattern = (bars: number) => normalizePattern([], bars * STEPS_PER_BAR)
 
 export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
   const grooveSeed = Math.floor(Math.random() * 0x100000000)
@@ -307,6 +309,7 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
     masterVolume: 0.9,
     key: 'C',
     scale: 'pentatonic',
+    kit: 'acoustic',
     isolateRecording: false,
     canRestoreTrack: false,
     canUndoBatch: false,
@@ -362,6 +365,7 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
   function setPatternState(pattern: boolean[][], extra: Partial<EngineState> = {}, keepSkips = false) {
     invalidateBatch()
     if (!keepSkips) skippedSteps.clear()
+    pattern = normalizePattern(pattern, (extra.bars ?? state.bars) * STEPS_PER_BAR)
     const tracks = state.tracks.slice()
     tracks[D] = { ...tracks[D], status: hasSteps(pattern) ? 'recorded' : 'empty', canUndo: undoPattern !== null, revision: tracks[D].revision + 1 }
     set({ ...extra, pattern, tracks })
@@ -488,10 +492,10 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
     return s.pattern.map((row) => row[step])
   }
 
-  function scheduleDrum(c: BaseAudioContext, dest: AudioNode, s: EngineState, voice: DrumVoice, absoluteStep: number, time: number, now: number) {
-    if (!s.liveDrums) return playDrum(c, dest, voice, time)
-    const { velocity, offset } = humanize(voice, absoluteStep, grooveSeed)
-    playDrum(c, dest, voice, Math.max(now, time + offset), velocity)
+  function scheduleDrum(c: BaseAudioContext, dest: AudioNode, s: EngineState, slot: number, absoluteStep: number, time: number, now: number) {
+    if (!s.liveDrums) return playKitVoice(c, dest, s.kit, slot, time)
+    const { velocity, offset } = humanize(slotRole(s.kit, slot), absoluteStep, grooveSeed)
+    playKitVoice(c, dest, s.kit, slot, Math.max(now, time + offset), velocity)
   }
 
   function tick() {
@@ -514,7 +518,7 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
         const skipped = skippedSteps.get(key)
         if (skipped !== undefined && skipped <= nextStep) skippedSteps.delete(key)
         if (skipped === nextStep || t < now || !drumBus) return
-        if (on) scheduleDrum(c, drumBus, state, DRUM_VOICES[v], nextStep, t, now)
+        if (on) scheduleDrum(c, drumBus, state, v, nextStep, t, now)
       })
     }
     recs.forEach((r, i) => {
@@ -1016,7 +1020,7 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
     if (!valid(i) || busy()) return
     if (i === D) {
       if (!undoPattern) return
-      const p = resizePattern(undoPattern, state.bars * STEPS_PER_BAR)
+      const p = normalizePattern(undoPattern, state.bars * STEPS_PER_BAR)
       undoPattern = null
       lastToggle = 0
       return setPatternState(p)
@@ -1241,7 +1245,7 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
 
     setBpm: (bpm) => setTiming({ bpm: Math.round(clamp(bpm, 60, 180, state.bpm)) }),
     setBars: (bars) =>
-      isBars(bars) && setTiming({ bars, pattern: resizePattern(state.pattern, bars * STEPS_PER_BAR) }),
+      isBars(bars) && setTiming({ bars, pattern: normalizePattern(state.pattern, bars * STEPS_PER_BAR) }),
     setMetronome(metronome) {
       if (ready() && metronome !== state.metronome) set({ metronome })
     },
@@ -1353,14 +1357,16 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
     },
     setPattern(pattern) {
       if (!ready()) return
-      const rows = DRUM_VOICES.map((_, v) => pattern[v] ?? [])
       savePattern(false)
-      setPatternState(resizePattern(rows, state.bars * STEPS_PER_BAR))
+      setPatternState(pattern)
     },
-    triggerDrum(voice: DrumVoice) {
-      if (!ready() || !DRUM_VOICES.includes(voice)) return
+    setKit(kit) {
+      if (ready() && KIT_IDS.includes(kit) && kit !== state.kit) set({ kit })
+    },
+    triggerDrum(slot) {
+      if (!ready() || !Number.isInteger(slot) || slot < 0 || slot >= DRUM_SLOTS) return
       void resume()
-      playDrum(ctx!, mix!.ch[D].input, voice, ctx!.currentTime)
+      playKitVoice(ctx!, mix!.ch[D].input, state.kit, slot, ctx!.currentTime)
     },
 
     getTakeAudio(i) {
@@ -1393,7 +1399,7 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
           source: take.source ?? state.tracks[take.track].source,
           notes: gridNotes(take.notes),
         }))
-        if (batch.pattern !== undefined) pattern = resizePattern(DRUM_VOICES.map((_, v) => batch.pattern![v] ?? []), state.bars * STEPS_PER_BAR)
+        if (batch.pattern !== undefined) pattern = normalizePattern(batch.pattern, state.bars * STEPS_PER_BAR)
       } catch { return false }
       const saved = {
         tracks: prepared.map(({ index }) => ({ index, take: takeSnapshot(index), undo: undoTake[index], silentTake: state.tracks[index].silentTake })),
@@ -1561,7 +1567,7 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
       for (let k = 0; k * sd < win.total / sr; k++) {
         const absoluteStep = k - warmSteps
         drumStep(s, absoluteStep).forEach((on, v) => {
-          if (on) scheduleDrum(off, m.ch[D].input, s, DRUM_VOICES[v], absoluteStep, k * sd, 0)
+          if (on) scheduleDrum(off, m.ch[D].input, s, v, absoluteStep, k * sd, 0)
         })
       }
       const full = await off.startRendering()
@@ -1580,6 +1586,7 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
         masterVolume: state.masterVolume,
         key: state.key,
         scale: state.scale,
+        kit: state.kit,
         sampleRate: sr,
         tracks: state.tracks.map((t, i) => {
           const b = buffers[i]
@@ -1611,8 +1618,8 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
         const params = mergeParams({ ...cur, name: defaultName(i), source: 'mic', padMode: 'notes' }, t ?? {}, defaultName(i))
         return { ...params, notes: buffers[i] && isInstrument(params.source) ? gridNotes(t?.notes) : null, status: buffers[i] ? ('recorded' as const) : ('empty' as const), canUndo: false, silentTake: false, revision: cur.revision + 1 }
       })
-      const pattern = resizePattern(
-        DRUM_VOICES.map((_, v) => data.pattern?.[v] ?? []),
+      const pattern = normalizePattern(
+        data.pattern ?? [],
         bars * STEPS_PER_BAR,
       )
       tracks[D] = { ...tracks[D], status: hasSteps(pattern) ? 'recorded' : 'empty' }
@@ -1623,6 +1630,7 @@ export function createEngine(opts: { tracks?: number } = {}): LoopEngine {
         masterVolume: clamp(data.masterVolume, 0, 1, state.masterVolume),
         key: data.key && KEYS.includes(data.key) ? data.key : 'C',
         scale: data.scale && PAD_SCALES.includes(data.scale) ? data.scale : 'pentatonic',
+        kit: data.kit && KIT_IDS.includes(data.kit) ? data.kit : 'acoustic',
         canRestoreTrack: false,
         tracks,
         pattern,

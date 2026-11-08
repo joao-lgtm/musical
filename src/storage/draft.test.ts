@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { DRUM_SLOTS } from '../audio/types'
 import type { EngineState, TrackState } from '../audio/types'
 import { createDraftProgress, draftWriteAction, hasDraftContentChanged, isDraftEmpty, observeDraft } from './draft'
 
@@ -6,9 +7,9 @@ function state(): EngineState {
   return {
     status: 'ready', error: null, mic: 'off', micError: null, micTrack: null,
     bpm: 120, bars: 1, metronome: false, latencyOffset: 0, playing: false,
-    loopDuration: 2, masterVolume: 1, key: 'C', scale: 'pentatonic',
+    loopDuration: 2, masterVolume: 1, key: 'C', scale: 'pentatonic', kit: 'acoustic',
     isolateRecording: false, canRestoreTrack: false, canUndoBatch: false, liveDrums: true,
-    pattern: Array.from({ length: 4 }, () => Array<boolean>(16).fill(false)),
+    pattern: Array.from({ length: DRUM_SLOTS }, () => Array<boolean>(16).fill(false)),
     tracks: [{
       kind: 'mic', name: 'Faixa 1', status: 'empty', volume: 1, muted: false,
       solo: false, pan: 0, filter: 1, delay: 0, reverb: 0, nudge: 0,
@@ -56,6 +57,14 @@ describe('hasDraftContentChanged', () => {
       expect(hasDraftContentChanged(base, next)).toBe(false)
       expect(observeDraft(createDraftProgress(base), next).dirty).toBe(false)
     }
+  })
+
+  it.each(['808', 'lofi'] as const)('trocar para kit %s marca dirty sem mudar o pattern', kit => {
+    const base = state()
+    const next = { ...base, kit }
+    expect(hasDraftContentChanged(base, next)).toBe(true)
+    expect(observeDraft(createDraftProgress(base), next).dirty).toBe(true)
+    expect(hasDraftContentChanged(base, { ...base, kit: 'acoustic' })).toBe(false)
   })
 
   it('detecta mudanca do tom do projeto', () => {
@@ -144,10 +153,13 @@ describe('isDraftEmpty', () => {
     expect(isDraftEmpty(trackChange(state(), { status: 'recorded', muted: true, volume: 0 }))).toBe(false)
   })
 
-  it('reconhece qualquer passo de bateria independentemente do status', () => {
+  it.each(Array.from({ length: DRUM_SLOTS }, (_, slot) => slot))('reconhece passo isolado no slot %i de oito linhas', slot => {
     const next = state()
-    ;(next.pattern[3] as boolean[])[15] = true
+    expect(next.pattern).toHaveLength(8)
+    expect(isDraftEmpty(next)).toBe(true)
+    ;(next.pattern[slot] as boolean[])[15] = true
     expect(isDraftEmpty(next)).toBe(false)
+    expect(hasDraftContentChanged(state(), next)).toBe(true)
   })
 
   it('nao confunde o status da bateria com um take de microfone', () => {

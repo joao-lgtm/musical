@@ -1,5 +1,7 @@
 import { useRef } from 'react'
 import type { CSSProperties } from 'react'
+import { DRUM_SLOTS } from '../audio/types'
+import { KITS } from '../audio/kits'
 import type { EngineState, TrackState } from '../audio/types'
 import { readFrame, useEngine, useFrame } from '../hooks/useEngine'
 import { Channel } from './Channel'
@@ -47,7 +49,7 @@ export function Mixer({ state, studio }: Props) {
             dimmed={anySolo && !t.solo}
           />
         ))}
-        <DrumStrip index={drumsIndex} track={state.tracks[drumsIndex]} pattern={state.pattern} studio={studio} dimmed={anySolo && !state.tracks[drumsIndex].solo} />
+        <DrumStrip index={drumsIndex} track={state.tracks[drumsIndex]} pattern={state.pattern} kit={state.kit} studio={studio} dimmed={anySolo && !state.tracks[drumsIndex].solo} />
         <MasterStrip state={state} />
       </div>
       <NameIdeas />
@@ -55,7 +57,7 @@ export function Mixer({ state, studio }: Props) {
   )
 }
 
-function DrumStrip({ index, track, pattern, studio, dimmed }: { index: number; track: TrackState; pattern: EngineState['pattern']; studio: boolean; dimmed: boolean }) {
+function DrumStrip({ index, track, pattern, kit, studio, dimmed }: { index: number; track: TrackState; pattern: EngineState['pattern']; kit: EngineState['kit']; studio: boolean; dimmed: boolean }) {
   const engine = useEngine()
   const head = useRef<HTMLDivElement>(null)
   const steps = pattern[0]?.length ?? 16
@@ -73,7 +75,7 @@ function DrumStrip({ index, track, pattern, studio, dimmed }: { index: number; t
       data-status={track.status}
       data-muted={track.muted || undefined}
       data-dim={dimmed || undefined}
-      style={{ '--ch': 'var(--ch9)', '--ch-lit': 'var(--ch9-lit)', '--steps': steps } as CSSProperties}
+      style={{ '--ch': 'var(--ch9)', '--ch-lit': 'var(--ch9-lit)', '--steps': steps, '--drum-slots': DRUM_SLOTS } as CSSProperties}
       aria-labelledby="ch-drums-name"
     >
       <header className="strip__head">
@@ -82,11 +84,11 @@ function DrumStrip({ index, track, pattern, studio, dimmed }: { index: number; t
         <span className="strip__status" role="status">{track.status === 'recorded' ? 'Padrão' : 'Vazia'}</span>
       </header>
 
-      <div className="screen screen--pattern" aria-hidden="true">
+      <div className="screen screen--pattern" role="img" aria-label={`Kit ${KITS[kit ?? 'acoustic'].label}: ${KITS[kit ?? 'acoustic'].slots.map((slot) => slot.name).join(', ')}`}>
         <div className="mini">
-          {pattern.map((row, v) => (
-            <div className="mini__row" key={v}>
-              {row.map((on, s) => <i key={s} data-on={on || undefined} data-beat={s % 4 === 0 || undefined} />)}
+          {Array.from({ length: DRUM_SLOTS }, (_, v) => (
+            <div className="mini__row" key={v} title={KITS[kit ?? 'acoustic'].slots[v].name}>
+              {Array.from({ length: steps }, (_, s) => <i key={s} data-on={pattern[v]?.[s] || undefined} data-beat={s % 4 === 0 || undefined} />)}
             </div>
           ))}
           <div className="mini__head" ref={head} />

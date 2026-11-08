@@ -1,21 +1,35 @@
 import { useEffect, useRef, useState } from 'react'
-import { DRUM_VOICES, STEPS_PER_BAR, type DrumVoice } from '../audio/types'
+import { DRUM_SLOTS, KIT_IDS, STEPS_PER_BAR, type KitId } from '../audio/types'
+import { KITS } from '../audio/kits'
 import { useEngine, useEngineState, useFrame } from '../hooks/useEngine'
 import { DiceIcon } from './Icons'
 import { DEMO_PRESET, surprise, toPattern } from './drumPresets'
 import s from './Sequencer.module.css'
 
-const VOICES: Record<DrumVoice, { name: string; key: string }> = {
-  kick: { name: 'Bumbo', key: 'Q' },
-  snare: { name: 'Caixa', key: 'W' },
-  hat: { name: 'Chimbal', key: 'E' },
-  clap: { name: 'Palmas', key: 'R' },
+const SLOT_KEYS = ['Q', 'W', 'E', 'R', 'Z', 'X', 'C', 'V']
+const SLOT_CODES = SLOT_KEYS.map((key) => `Key${key}`)
+const SLOTS = Array.from({ length: DRUM_SLOTS }, (_, i) => i)
+const expandedThisSession = () => {
+  try { return sessionStorage.getItem('loopstudio.extraDrums') === '1' } catch { return false }
 }
 const FIELD = 'input, textarea, select, [contenteditable]:not([contenteditable="false"])'
 
 export function Sequencer({ coachStep = null }: { coachStep?: number | null }) {
   const engine = useEngine()
   const state = useEngineState(engine)
+  const kit = KITS[state.kit ?? 'acoustic']
+  const [expanded, setExpanded] = useState(expandedThisSession)
+  const hasExtraSteps = state.pattern.slice(4, DRUM_SLOTS).some((row) => row.some(Boolean))
+  const showExtra = expanded || hasExtraSteps
+  function expand() {
+    setExpanded(true)
+    try { sessionStorage.setItem('loopstudio.extraDrums', '1') } catch { /* sem persistência */ }
+  }
+  useEffect(() => {
+    if (hasExtraSteps) expand()
+  }, [hasExtraSteps])
+  const coachSlot = coachStep === null ? -1 : kit.slots.findIndex((slot) => 'role' in slot && slot.role === ['kick', 'snare', 'hat'][coachStep])
+  const coachTarget = coachSlot < 0 ? coachStep : coachSlot
   const ready = state.status === 'ready'
   const steps = state.pattern[0]?.length ?? 0
   const bars = Math.max(1, steps / STEPS_PER_BAR)
@@ -27,12 +41,12 @@ export function Sequencer({ coachStep = null }: { coachStep?: number | null }) {
   const [padRec, setPadRec] = useState(false)
 
   const hit = (v: number) => {
-    engine.triggerDrum(DRUM_VOICES[v])
+    engine.triggerDrum(v)
     // REC pads: quantiza ao passo mais próximo do que está sendo ouvido (getPosition já desconta a latência de saída)
     const pos = engine.getPosition()
     if (padRec && pos.playing && !pos.countIn && steps > 0) {
       const step = Math.round(pos.phase * steps) % steps
-      if (!engine.getState().pattern[v][step]) engine.toggleStep(v, step, { skipNext: true })
+      if (!engine.getState().pattern[v]?.[step]) engine.toggleStep(v, step, { skipNext: true })
       root.current?.querySelector(`[data-voice="${v}"] > [data-step="${step}"]`)?.animate(
         [{ boxShadow: '0 0 0 3px #fff, 0 0 24px var(--c)' }, { boxShadow: '0 0 0 0 transparent' }],
         { duration: 450, easing: 'cubic-bezier(0.16, 1, 0.3, 1)' },
@@ -58,7 +72,7 @@ export function Sequencer({ coachStep = null }: { coachStep?: number | null }) {
     lit.current = step
   })
 
-  // Q W E R tocam as vozes, T liga o REC pads (Espaço e números ficam com o App)
+  // Q W E R e Z X C V tocam os oito slots, T liga o REC pads (Espaço e números ficam com o App)
   useEffect(() => {
     if (!ready) return
     const down = (e: KeyboardEvent) => {
@@ -69,7 +83,7 @@ export function Sequencer({ coachStep = null }: { coachStep?: number | null }) {
         e.preventDefault()
         return setPadRec((on) => !on)
       }
-      const v = ['KeyQ', 'KeyW', 'KeyE', 'KeyR'].indexOf(e.code)
+      const v = SLOT_CODES.indexOf(e.code)
       if (v < 0) return
       e.preventDefault()
       hitRef.current(v)
@@ -91,10 +105,15 @@ export function Sequencer({ coachStep = null }: { coachStep?: number | null }) {
   }
 
   return (
-    <section className={s.seq} aria-labelledby="seq-title">
+    <section className={`${s.seq} drum-seq`} data-expanded={showExtra || undefined} aria-labelledby="seq-title">
       <header className={s.head}>
         <h2 id="seq-title" className={s.title}>Bateria</h2>
         <div className={s.actions}>
+          <label className="drum-kit"><span>Kit</span>
+            <select aria-label="Kit da bateria" value={state.kit ?? 'acoustic'} disabled={state.status !== 'ready'} onChange={(e) => engine.setKit(e.target.value as KitId)}>
+              {KIT_IDS.map((id) => <option key={id} value={id}>{KITS[id].label}</option>)}
+            </select>
+          </label>
           <span className={s.picked} role="status">{picked && <>Tocando <b>{picked}</b></>}</span>
           <button type="button" className={s.btn} title="Sorteia só o padrão de bateria" aria-label="Sorteia só o padrão de bateria" onClick={onSurprise} disabled={!ready}>
             <DiceIcon size={18} />
@@ -114,10 +133,10 @@ export function Sequencer({ coachStep = null }: { coachStep?: number | null }) {
         </div>
       </header>
 
-      <div className={s.pads} role="group" aria-label="Pads ao vivo" data-rec={padRec || undefined}>
-        {DRUM_VOICES.map((voice, v) => (
+      <div className={`${s.pads} drum-pads`} role="group" aria-label="Pads ao vivo" data-rec={padRec || undefined}>
+        {SLOTS.map((v) => (
           <button
-            key={voice}
+            key={v}
             ref={(el) => { pads.current[v] = el }}
             type="button"
             className={s.pad}
@@ -127,12 +146,13 @@ export function Sequencer({ coachStep = null }: { coachStep?: number | null }) {
             onPointerDown={(e) => { if (e.button === 0) hit(v) }}
             onClick={(e) => { if (e.detail === 0) hit(v) }}
           >
-            <span>{VOICES[voice].name}</span>
-            <kbd className={s.key} aria-hidden="true">{VOICES[voice].key}</kbd>
+            <span>{kit.slots[v].name}</span>
+            <kbd className={s.key} aria-hidden="true">{SLOT_KEYS[v]}</kbd>
           </button>
         ))}
       </div>
 
+      {!showExtra && <button type="button" className="btn btn--ghost drum-more" onClick={expand} aria-expanded={false}>+ mais sons</button>}
       <div data-coach-grid ref={root} className={s.bars}>
         {Array.from({ length: bars }, (_, b) => (
           <div key={b} className={s.bar} role="group" aria-label={`Compasso ${b + 1}`}>
@@ -140,22 +160,22 @@ export function Sequencer({ coachStep = null }: { coachStep?: number | null }) {
             <div className={s.halves}>
               {[0, 1].map((h) => (
                 <div key={h} className={s.half}>
-                  {DRUM_VOICES.map((voice, v) => (
-                    <div key={voice} className={s.row} data-voice={v}>
-                      <span className={s.voice} aria-hidden={h === 1}>{VOICES[voice].name}</span>
+                  {SLOTS.map((v) => (
+                    <div key={v} className={s.row} data-voice={v} data-extra-slot={v >= 4 || undefined}>
+                      <span className={s.voice} aria-hidden={h === 1}>{kit.slots[v].name}</span>
                       {Array.from({ length: 8 }, (_, k) => {
                         const step = b * STEPS_PER_BAR + h * 8 + k
-                        const on = state.pattern[v][step]
+                        const on = state.pattern[v]?.[step] ?? false
                         return (
                           <button
                             key={step}
                             type="button"
                             className={s.cell}
-                            data-coach-target={coachStep === v && (v === 0 ? step % 16 === 0 || step % 16 === 8 : v === 1 ? step % 16 === 4 || step % 16 === 12 : step % 2 === 0) || undefined}
+                            data-coach-target={coachTarget === v && (coachStep === 0 ? step % 16 === 0 || step % 16 === 8 : coachStep === 1 ? step % 16 === 4 || step % 16 === 12 : step % 2 === 0) || undefined}
                             data-step={step}
                             data-beat={k % 4 === 0 ? '' : undefined}
                             aria-pressed={on}
-                            aria-label={`${VOICES[voice].name}, passo ${step + 1}`}
+                            aria-label={`${kit.slots[v].name}, passo ${step + 1}`}
                             disabled={!ready}
                             onClick={() => engine.toggleStep(v, step)}
                           />

@@ -3,8 +3,9 @@ import type { Ref } from 'react'
 const KEYS: [string[], string][] = [
   [['Espaço'], 'Tocar / parar'],
   [['1', '…', '8'], 'Gravar (ou cancelar) a faixa'],
-  [['Q', 'W', 'E', 'R'], 'Pads da bateria: bumbo, caixa, chimbal, palmas'],
+  [['Q', 'W', 'E', 'R'], 'Peças 1–4 do kit da bateria'],
   [['A', 'S', 'D', 'F', 'G', 'H', 'J', 'K', 'L', 'Ç'], 'Notas do instrumento: segure para tocar; L e Ç só na escala maior'],
+  [['Z', 'X', 'C', 'V'], 'Peças 5–8 do kit da bateria'],
   [['T'], 'Ligar / desligar a gravação dos pads'],
   [['P'], 'Entrar / sair do modo Performance'],
   [['Esc'], 'Sair do modo Performance ou fechar a janela'],

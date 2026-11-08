@@ -1,4 +1,6 @@
 import { useEffect, useRef } from 'react'
+import { DRUM_SLOTS } from '../audio/types'
+import { KITS } from '../audio/kits'
 import type { EngineState } from '../audio/types'
 import { readFrame, useEngine, useFrame } from '../hooks/useEngine'
 
@@ -78,7 +80,8 @@ export function Performance({ state, onExit }: { state: EngineState; onExit: () 
     f.glow += (master - f.glow) * 0.12
     const steps = s.pattern[0]?.length ?? 16
     if (pos.playing && !pos.countIn && pos.step !== f.lastStep) {
-      if (s.pattern[0]?.[pos.step] && !s.tracks[drumsIdx]?.muted) f.kick = 1
+      const kick = KITS[s.kit ?? 'acoustic'].slots.findIndex((slot) => 'role' in slot && slot.role === 'kick')
+      if (s.pattern[Math.max(0, kick)]?.[pos.step] && !s.tracks[drumsIdx]?.muted) f.kick = 1
       f.lastStep = pos.step
     }
     f.kick *= 0.9
@@ -151,7 +154,7 @@ export function Performance({ state, onExit }: { state: EngineState; onExit: () 
     ctx.translate(cx, cy)
     ctx.rotate(rot)
     for (let st = 0; st < steps; st++) {
-      const hits = s.pattern.reduce((n, row) => n + (row[st] ? 1 : 0), 0)
+      const hits = Array.from({ length: DRUM_SLOTS }, (_, slot) => s.pattern[slot]?.[st] ? 1 : 0).reduce<number>((sum, hit) => sum + hit, 0)
       const a = -Math.PI / 2 + ((st + 0.5) / steps) * TAU
       const now = pos.playing && !pos.countIn && st === pos.step
       ctx.globalAlpha = hits ? (now ? 1 : 0.75) : 0.35
@@ -185,10 +188,11 @@ export function Performance({ state, onExit }: { state: EngineState; onExit: () 
     <div ref={stage} className="perf" role="dialog" aria-modal="true" aria-label="Palco do modo Performance. Espaço para tocar ou pausar; Esc para sair." tabIndex={-1}>
       <canvas ref={canvas} className="perf__canvas" aria-hidden="true" />
       <p className="perf__hud perf__hud--meta" role="status">
-        <strong>{layers}</strong> {layers === 1 ? 'camada' : 'camadas'} <span aria-hidden="true">·</span> {state.bpm} BPM
+        <strong>{layers}</strong> {layers === 1 ? 'camada' : 'camadas'} <span aria-hidden="true">·</span> {state.bpm} BPM · {KITS[state.kit ?? 'acoustic'].label}
       </p>
+      <p className="sr-only">Peças da bateria: {KITS[state.kit ?? 'acoustic'].slots.map((slot) => slot.name).join(', ')}</p>
       <p className="perf__hud perf__hud--keys" aria-hidden="true">
-        <kbd>1</kbd>–<kbd>8</kbd> grava · <kbd>Espaço</kbd> · <kbd>Q</kbd><kbd>W</kbd><kbd>E</kbd><kbd>R</kbd>
+        <kbd>1</kbd>–<kbd>8</kbd> grava · <kbd>Espaço</kbd> · <kbd>Q</kbd><kbd>W</kbd><kbd>E</kbd><kbd>R</kbd> · <kbd>Z</kbd><kbd>X</kbd><kbd>C</kbd><kbd>V</kbd>
       </p>
       <button className="btn btn--sm btn--ghost perf__exit" onClick={onExit}>
         Sair <kbd>Esc</kbd>
