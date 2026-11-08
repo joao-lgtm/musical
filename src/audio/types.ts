@@ -88,8 +88,17 @@ export interface CalibrationResult {
   jitterMs: number
 }
 
+/** As 4 vozes clássicas sintetizadas por drums.ts (slots 0..3 do kit Acústico). */
 export type DrumVoice = 'kick' | 'snare' | 'hat' | 'clap'
 export const DRUM_VOICES: readonly DrumVoice[] = ['kick', 'snare', 'hat', 'clap']
+
+/** Posições da bateria: o padrão tem sempre DRUM_SLOTS linhas; cada kit define o que soa em cada uma. */
+export const DRUM_SLOTS = 8
+/** Kits de bateria (kits.ts define nome e síntese de cada slot). */
+export type KitId = 'acoustic' | '808' | 'lofi'
+export const KIT_IDS: readonly KitId[] = ['acoustic', '808', 'lofi']
+/** Papel rítmico de um slot, usado por viradas/humanização e pelo coach: kick, snare, hat ou percussão. */
+export type SlotRole = 'kick' | 'snare' | 'hat' | 'perc'
 /** 16 passos (semicolcheias) por compasso. */
 export const STEPS_PER_BAR = 16
 
@@ -125,6 +134,7 @@ export interface EngineState {
   readonly masterVolume: number // 0..1
   readonly key: Key // padrão 'C'
   readonly scale: PadScale // padrão 'pentatonic'
+  readonly kit: KitId // padrão 'acoustic'
   /** Enquanto um canal mic está armado/gravando, só ele (e metrônomo/contagem) soa na monitoração; os outros canais e a bateria ficam mudos. Não afeta renderMix/exportação. */
   readonly isolateRecording: boolean
   /** Há uma faixa removida que restoreTrack() pode recolocar (1 nível). */
@@ -135,7 +145,7 @@ export interface EngineState {
   readonly liveDrums: boolean
   /** 8 canais mic + 1 canal drums no fim (índice tracks.length - 1). */
   readonly tracks: readonly TrackState[]
-  /** pattern[voz][passo], voz na ordem de DRUM_VOICES, bars * STEPS_PER_BAR passos. */
+  /** pattern[slot][passo]: DRUM_SLOTS linhas (slot do kit atual), bars * STEPS_PER_BAR passos. */
   readonly pattern: readonly (readonly boolean[])[]
 }
 
@@ -161,6 +171,8 @@ export interface ProjectData {
   key?: Key
   /** Ausente em projetos antigos → 'pentatonic'. */
   scale?: PadScale
+  /** Ausente em projetos antigos → 'acoustic'. */
+  kit?: KitId
   sampleRate: number
   /** `source` ausente em projetos antigos → 'mic'. */
   tracks: (Omit<TrackParams, 'source' | 'padMode'> & { source?: TrackSource; padMode?: PadMode; audio: Float32Array | null; notes?: GridNote[] })[]
@@ -231,6 +243,8 @@ export interface LoopEngine {
   setKey(key: Key): void
   /** Muda a escala dos pads (soltando as notas seguradas); takes já gravados não mudam. */
   setScale(scale: PadScale): void
+  /** Troca o kit: o padrão continua igual, só o som de cada slot muda. */
+  setKit(kit: KitId): void
   /**
    * Toca/solta uma nota do instrumento do canal (grau 0..PAD_COUNT[state.scale]-1 de padNotes(state.key, state.scale, INSTRUMENT_OCTAVE[source])).
    * Com padMode 'chords': i em 0..CHORD_DEGREES.length-1 toca/solta a tríade inteira (chordPads de harmony.ts), contando como 3 vozes; no take viram 3 GridNotes.
@@ -245,10 +259,10 @@ export interface LoopEngine {
    */
   previewNote(track: number, midi: number, duration?: number): void
   toggleStep(voice: number, step: number, opts?: { skipNext?: boolean }): void
-  /** Substitui o padrão inteiro numa única notificação; redimensionado para bars*STEPS_PER_BAR (repete ou corta). */
+  /** Substitui o padrão inteiro numa única notificação; redimensionado para bars*STEPS_PER_BAR (repete ou corta) e completado até DRUM_SLOTS linhas (padrões de 4 linhas ganham 4 vazias). */
   setPattern(pattern: boolean[][]): void
-  /** Toca uma voz da bateria agora (pads ao vivo / prévia). */
-  triggerDrum(voice: DrumVoice): void
+  /** Toca agora o slot 0..DRUM_SLOTS-1 do kit atual (pads ao vivo / prévia). */
+  triggerDrum(slot: number): void
   /** Leitura barata, para requestAnimationFrame. */
   getPosition(): Position
   getPeaks(track: number, n: number): Float32Array | null

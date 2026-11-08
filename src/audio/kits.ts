@@ -1,25 +1,30 @@
 import { playDrum } from './drums'
 
-export type KitId = 'acoustic' | '808' | 'lofi'
+import { DRUM_SLOTS } from './types'
+import type { KitId, SlotRole } from './types'
 export type KitVoice = 'kick' | 'snare' | 'hat' | 'clap' | 'openHat' | 'tom' | 'cymbal' | 'shaker' |
   'kick808' | 'snare808' | 'tom808' | 'cowbell' | 'rimshot'
 
 const acoustic = [
-  { name: 'Bumbo', voice: 'kick' }, { name: 'Caixa', voice: 'snare' },
-  { name: 'Chimbal', voice: 'hat' }, { name: 'Palmas', voice: 'clap' },
-  { name: 'Chimbal aberto', voice: 'openHat' }, { name: 'Tom', voice: 'tom' },
-  { name: 'Prato', voice: 'cymbal' }, { name: 'Shaker', voice: 'shaker' },
-] satisfies { name: string; voice: KitVoice }[]
+  { name: 'Bumbo', voice: 'kick', role: 'kick' }, { name: 'Caixa', voice: 'snare', role: 'snare' },
+  { name: 'Chimbal', voice: 'hat', role: 'hat' }, { name: 'Palmas', voice: 'clap', role: 'perc' },
+  { name: 'Chimbal aberto', voice: 'openHat', role: 'hat' }, { name: 'Tom', voice: 'tom', role: 'perc' },
+  { name: 'Prato', voice: 'cymbal', role: 'perc' }, { name: 'Shaker', voice: 'shaker', role: 'hat' },
+] satisfies { name: string; voice: KitVoice; role: SlotRole }[]
 
-export const KITS: Record<KitId, { label: string; slots: { name: string; voice: KitVoice }[] }> = {
+export const KITS: Record<KitId, { label: string; slots: { name: string; voice: KitVoice; role: SlotRole }[] }> = {
   acoustic: { label: 'Acústico', slots: acoustic },
   '808': { label: '808', slots: [
-    { name: 'Bumbo 808', voice: 'kick808' }, { name: 'Caixa 808', voice: 'snare808' },
-    { name: 'Chimbal fechado', voice: 'hat' }, { name: 'Palmas', voice: 'clap' },
-    { name: 'Chimbal aberto', voice: 'openHat' }, { name: 'Tom 808', voice: 'tom808' },
-    { name: 'Cowbell', voice: 'cowbell' }, { name: 'Rimshot', voice: 'rimshot' },
+    { name: 'Bumbo 808', voice: 'kick808', role: 'kick' }, { name: 'Caixa 808', voice: 'snare808', role: 'snare' },
+    { name: 'Chimbal fechado', voice: 'hat', role: 'hat' }, { name: 'Palmas', voice: 'clap', role: 'perc' },
+    { name: 'Chimbal aberto', voice: 'openHat', role: 'hat' }, { name: 'Tom 808', voice: 'tom808', role: 'perc' },
+    { name: 'Cowbell', voice: 'cowbell', role: 'perc' }, { name: 'Rimshot', voice: 'rimshot', role: 'perc' },
   ] },
   lofi: { label: 'Lo-fi', slots: acoustic.map(slot => ({ ...slot })) },
+}
+
+export function slotRole(kit: KitId, slot: number): SlotRole {
+  return KITS[kit].slots[slot]?.role ?? 'perc'
 }
 
 const noises = new WeakMap<BaseAudioContext, AudioBuffer>()
@@ -38,7 +43,7 @@ function noiseBuffer(ctx: BaseAudioContext): AudioBuffer {
 
 export function playKitVoice(ctx: BaseAudioContext, dest: AudioNode, kit: KitId, slot: number, when: number, velocity = 1): void {
   velocity = Number.isFinite(velocity) ? Math.max(0, Math.min(1, velocity)) : 0
-  if (!velocity || !Number.isInteger(slot) || slot < 0 || slot >= 8) return
+  if (!velocity || !Number.isInteger(slot) || slot < 0 || slot >= DRUM_SLOTS) return
   const voice = KITS[kit].slots[slot].voice
   if (kit === 'acoustic' && (voice === 'kick' || voice === 'snare' || voice === 'hat' || voice === 'clap')) {
     playDrum(ctx, dest, voice, when, velocity)

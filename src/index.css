@@ -813,3 +813,14 @@ input[type='range']::-moz-range-thumb { width: 16px; height: 24px; border: 0; bo
 .note-pads[data-chords] .note-pad { min-height: 72px; }
 .note-pads[data-chords] strong { display: block; font-size: 1rem; }
 .note-pads[data-chords] small { display: block; margin-top: 4px; font-size: 0.8125rem; }
+
+/* Bateria com oito slots e kits. */
+.drum-kit { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 6px; font-size: 0.875rem; }
+.drum-kit select { min-height: 44px; padding: 6px 10px; border: 1px solid var(--line-2); border-radius: 6px; background: var(--panel-hi); color: var(--ink); }
+.drum-pads { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.drum-pads button { min-width: 0; min-height: 44px; overflow-wrap: anywhere; }
+.drum-seq:not([data-expanded]) [data-extra-slot] { display: none; }
+.desk[data-studio] .drum-seq [data-extra-slot] { display: grid; }
+.desk[data-studio] .drum-more { display: none; }
+.drum-more { min-height: 44px; }
+.mini { grid-template-rows: repeat(var(--drum-slots, 8), 1fr); gap: 2px; }

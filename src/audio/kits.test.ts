@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
-import { KITS, playKitVoice } from './kits'
-import type { KitId } from './kits'
+import { KITS, playKitVoice, slotRole } from './kits'
+import { DRUM_SLOTS, KIT_IDS } from './types'
+import type { KitId } from './types'
 import { playDrum } from './drums'
 import { DRUM_VOICES } from './types'
 
@@ -37,9 +38,19 @@ function signature(nodes: ReturnType<typeof context>['nodes']) {
 }
 
 describe('kits', () => {
+  it('expoe os papeis de cada slot pelo contrato compartilhado', () => {
+    const acousticRoles = ['kick', 'snare', 'hat', 'perc', 'hat', 'perc', 'perc', 'hat']
+    for (const kit of KIT_IDS) {
+      const expected = kit === '808' ? [...acousticRoles.slice(0, 7), 'perc'] : acousticRoles
+      expect(KITS[kit].slots.map(slot => slot.role)).toEqual(expected)
+      expect(Array.from({ length: DRUM_SLOTS }, (_, slot) => slotRole(kit, slot))).toEqual(expected)
+    }
+    expect(slotRole('acoustic', -1)).toBe('perc')
+    expect(slotRole('808', 8)).toBe('perc')
+  })
   it.each(['acoustic', '808', 'lofi'] as const)('%s tem oito slots que agendam e limpam todos os nos', kit => {
-    expect(KITS[kit].slots).toHaveLength(8)
-    for (let slot = 0; slot < 8; slot++) {
+    expect(KITS[kit].slots).toHaveLength(DRUM_SLOTS)
+    for (let slot = 0; slot < DRUM_SLOTS; slot++) {
       const { ctx, nodes, dest } = context()
       playKitVoice(ctx, dest, kit, slot, 2)
       const sources = nodes.filter(node => node.kind === 'oscillator' || node.kind === 'noise')
@@ -63,7 +74,7 @@ describe('kits', () => {
     }
   })
   it.each(['acoustic', '808', 'lofi'] as const)('%s escala velocity sem alterar tempos', kit => {
-    for (let slot = 0; slot < 8; slot++) {
+    for (let slot = 0; slot < DRUM_SLOTS; slot++) {
       const a = context(), b = context()
       playKitVoice(a.ctx, a.dest, kit, slot, 1, 1)
       playKitVoice(b.ctx, b.dest, kit, slot, 1, 0.5)
@@ -76,7 +87,7 @@ describe('kits', () => {
     }
   })
   it('velocity zero e slots invalidos nao criam nos', () => {
-    for (const kit of Object.keys(KITS) as KitId[]) for (let slot = 0; slot < 8; slot++) {
+    for (const kit of Object.keys(KITS) as KitId[]) for (let slot = 0; slot < DRUM_SLOTS; slot++) {
       const { ctx, dest, nodes } = context()
       playKitVoice(ctx, dest, kit, slot, 0, 0)
       expect(nodes).toHaveLength(0)
@@ -88,7 +99,7 @@ describe('kits', () => {
     }
   })
   it('lofi satura levemente e filtra a 5kHz em cada fonte', () => {
-    for (let slot = 0; slot < 8; slot++) {
+    for (let slot = 0; slot < DRUM_SLOTS; slot++) {
       const { ctx, nodes, dest } = context()
       playKitVoice(ctx, dest, 'lofi', slot, 0)
       const sources = nodes.filter(node => node.kind === 'noise' || node.kind === 'oscillator')

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { fillPattern, humanize, isFillBar } from './groove'
-import { DRUM_VOICES } from './types'
+import { DRUM_VOICES, DRUM_SLOTS } from './types'
 
 describe('fillPattern', () => {
   it('preserva a primeira metade e o bumbo inicial e substitui a segunda metade', () => {
@@ -16,6 +16,22 @@ describe('fillPattern', () => {
     expect(base).toEqual(original)
     fill[0][0] = false
     expect(base[0][0]).toBe(true)
+  })
+  it('preserva oito linhas e desce das caixas para o tom na segunda metade', () => {
+    const base = Array.from({ length: DRUM_SLOTS }, () => Array<boolean>(32).fill(true))
+    const original = structuredClone(base)
+    const fill = fillPattern(base)
+    expect(fill).toHaveLength(DRUM_SLOTS)
+    fill.forEach(row => {
+      expect(row).toHaveLength(16)
+      expect(row.slice(0, 8)).toEqual(Array(8).fill(true))
+    })
+    expect(fill[0][0]).toBe(true)
+    expect(fill[1].slice(8)).toEqual([true, false, true, false, true, false, false, false])
+    expect(fill[5].slice(8)).toEqual([false, false, false, false, false, true, true, true])
+    for (const slot of [0, 2, 3, 4, 6, 7]) expect(fill[slot].slice(8)).toEqual(Array(8).fill(false))
+    expect(fillPattern(base)).toEqual(fill)
+    expect(base).toEqual(original)
   })
   it('suporta outro tamanho de compasso e linhas vazias', () => {
     const fill = fillPattern([], 8)
@@ -35,10 +51,11 @@ describe('isFillBar', () => {
 
 describe('humanize', () => {
   it('mantem limites, acentos fortes e offsets sem antecipar o inicio do take', () => {
-    for (const voice of DRUM_VOICES) for (let step = 0; step < 256; step++) {
-      const hit = humanize(voice, step, 42)
-      expect(hit.velocity).toBeGreaterThanOrEqual(step % 4 === 0 ? 0.95 : 0.75)
-      expect(hit.velocity).toBeLessThanOrEqual(step % 4 === 0 ? 1 : 0.9)
+    for (const role of ['kick', 'snare', 'hat', 'perc'] as const) for (let step = 0; step < 256; step++) {
+      const hit = humanize(role, step, 42)
+      const strong = (role === 'kick' || role === 'snare') && step % 4 === 0
+      expect(hit.velocity).toBeGreaterThanOrEqual(strong ? 0.95 : 0.75)
+      expect(hit.velocity).toBeLessThanOrEqual(strong ? 1 : 0.9)
       expect(Math.abs(hit.offset)).toBeLessThanOrEqual(0.005)
       if (step === 0) expect(hit.offset).toBeGreaterThanOrEqual(0)
     }
@@ -50,6 +67,14 @@ describe('humanize', () => {
       weak += humanize('hat', 3, seed).velocity
     }
     expect(accented / 100).toBeGreaterThan(weak / 100 + 0.04)
+  })
+  it('permite jitter ligeiramente maior na percussao sem ultrapassar cinco ms', () => {
+    let perc = 0, kick = 0
+    for (let step = 1; step < 1000; step++) {
+      perc += Math.abs(humanize('perc', step, 42).offset)
+      kick += Math.abs(humanize('kick', step, 42).offset)
+    }
+    expect(perc / 999).toBeGreaterThan(kick / 999 + 0.0002)
   })
   it('depende de seed, passo e voz sem usar Math.random', () => {
     const random = vi.spyOn(Math, 'random').mockImplementation(() => { throw new Error('random proibido') })
