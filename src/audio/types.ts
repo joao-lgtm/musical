@@ -99,6 +99,8 @@ export type KitId = 'acoustic' | '808' | 'lofi' | 'roda'
 export const KIT_IDS: readonly KitId[] = ['acoustic', '808', 'lofi', 'roda']
 /** Papel rítmico de um slot, usado por viradas/humanização e pelo coach: kick, snare, hat ou percussão. */
 export type SlotRole = 'kick' | 'snare' | 'hat' | 'perc'
+/** Molde de microtempo da bateria (ver EngineState.feel). */
+export type GrooveFeel = 'shuffle' | 'samba'
 /** 16 passos (semicolcheias) por compasso. */
 export const STEPS_PER_BAR = 16
 
@@ -135,8 +137,10 @@ export interface EngineState {
   readonly key: Key // padrão 'C'
   readonly scale: PadScale // padrão 'pentatonic'
   readonly kit: KitId // padrão 'acoustic'
-  /** Suingue 0..0.5: atraso das semicolcheias de contratempo (passos ímpares) em fração de semicolcheia. 0 = reto. Vale para bateria, metrônomo não, render sim. */
+  /** Intensidade do suingue 0..0.5 (fração de semicolcheia). 0 = reto. Vale para bateria e render, não para o metrônomo. */
   readonly swing: number
+  /** Molde do suingue: 'shuffle' atrasa as semicolcheias de contratempo; 'samba' aplica o microtempo de samba por posição na batida (groove.ts). */
+  readonly feel: GrooveFeel
   /** Enquanto um canal mic está armado/gravando, só ele (e metrônomo/contagem) soa na monitoração; os outros canais e a bateria ficam mudos. Não afeta renderMix/exportação. */
   readonly isolateRecording: boolean
   /** Há uma faixa removida que restoreTrack() pode recolocar (1 nível). */
@@ -177,6 +181,8 @@ export interface ProjectData {
   kit?: KitId
   /** Ausente em projetos antigos → 0. */
   swing?: number
+  /** Ausente em projetos antigos → 'shuffle'. */
+  feel?: GrooveFeel
   sampleRate: number
   /** `source` ausente em projetos antigos → 'mic'. */
   tracks: (Omit<TrackParams, 'source' | 'padMode'> & { source?: TrackSource; padMode?: PadMode; audio: Float32Array | null; notes?: GridNote[] })[]
@@ -251,6 +257,7 @@ export interface LoopEngine {
   setKit(kit: KitId): void
   /** Suingue 0..0.5 (limitado). */
   setSwing(swing: number): void
+  setFeel(feel: GrooveFeel): void
   /**
    * Toca/solta uma nota do instrumento do canal (grau 0..PAD_COUNT[state.scale]-1 de padNotes(state.key, state.scale, INSTRUMENT_OCTAVE[source])).
    * Com padMode 'chords': i em 0..CHORD_DEGREES.length-1 toca/solta a tríade inteira (chordPads de harmony.ts), contando como 3 vozes; no take viram 3 GridNotes.
