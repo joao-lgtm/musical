@@ -5,7 +5,7 @@ import type { CSSProperties } from 'react'
 import type { EngineState } from '../audio/types'
 import { useEngine } from '../hooks/useEngine'
 import { PlayIcon } from './Icons'
-import { STYLES, applyStyle } from './stylePresets'
+import { FEATURED_STYLES, STYLES, applyStyle } from './stylePresets'
 import type { StylePreset } from './stylePresets'
 import { DEMO_PRESET, toPattern } from './drumPresets'
 
@@ -71,12 +71,10 @@ export function StartScreen({ state }: { state: EngineState }) {
           <div className="start__styles" role="group" aria-labelledby="style-label">
             <p id="style-label">Ou comece por um estilo:</p>
             <div className="start__featured">
-              {['Pagode', 'Funk carioca', 'Sertanejo', 'Pop'].map((name) => {
+              {FEATURED_STYLES.map((name) => {
                 const style = STYLES.find((item) => item.name === name)
-                return <button type="button" className="btn btn--ghost" key={name} aria-pressed={false}
-                  disabled={busy || !style} title={style ? undefined : 'Em breve'} onClick={() => { if (style) void start(false, style) }}>
-                  {name}{!style && <small>Em breve</small>}
-                </button>
+                return style && <button type="button" className="btn btn--ghost" key={name} aria-pressed={false}
+                  disabled={busy} onClick={() => void start(false, style)}>{name}</button>
               })}
             </div>
             <button ref={stylesToggle} type="button" className="btn btn--ghost start__all-styles" aria-expanded={allStyles} aria-controls="all-styles"
@@ -87,7 +85,8 @@ export function StartScreen({ state }: { state: EngineState }) {
               {(['Brasil', 'Mundo'] as const).map((group) => <section key={group} className="start__style-group" aria-label={group}>
                 <h3>{group}</h3><div>{STYLES.filter((style) => style.group === group).map((style) =>
                   <button type="button" className="btn btn--ghost" key={style.name} aria-pressed={false} disabled={busy}
-                    onClick={() => start(false, style)}>{style.name}</button>)}</div>
+                    title={style.beta ? 'Estilo em ajuste: o som ainda não está fiel' : undefined}
+                    onClick={() => start(false, style)}>{style.name}{style.beta && <small> Beta</small>}</button>)}</div>
               </section>)}
             </div>}
 

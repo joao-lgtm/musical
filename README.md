@@ -1,19 +1,33 @@
 # Loop Studio
 
-Uma loop station no navegador: grave camadas pelo microfone, sobreponha bateria sintetizada e monte uma música em loop sem instalar nada. Tudo roda em Web Audio, sem samples e sem servidor; o áudio nunca sai da sua máquina.
+Uma loop station no navegador: comece com uma batida pronta, grave camadas pelo microfone ou toque instrumentos sintetizados, e monte uma música em loop sem instalar nada. Tudo roda em Web Audio, sem samples e sem servidor; o áudio nunca sai da sua máquina.
 
 **Demo:** https://joao-lgtm.github.io/musical/
 
 ## Funcionalidades
 
-- 8 faixas de microfone, gravadas sincronizadas com o início do loop, com overdub e desfazer
-- Bateria sintetizada (bumbo, caixa, chimbal, palmas) com sequenciador de 16 passos por compasso, pads ao vivo e "Surpreenda-me" com 5 estilos
+**Começar rápido**
+- Um clique e a batida já toca; o microfone só é pedido quando você for gravar
+- Estilos prontos (Pop, Lo-fi, Reggaeton, Funk) que ajustam BPM, tom, bateria e instrumento; estilos brasileiros (Pagode, Samba, Funk carioca) em **beta**
+- "Surpreenda-me com a banda": gera bateria, baixo e harmonia nas faixas livres, com um desfazer
+- Coach "Me ajuda a fazer um ritmo": 6 passos (bumbo, caixa, chimbal, baixo, harmonia, melodia)
+
+**Gravar e tocar**
+- 8 faixas, cada uma com microfone ou instrumento sintetizado: ocarina, flauta, kalimba, baixo e cavaquinho
+- Pads de notas (escala pentatônica ou maior) e pads de acordes (Casa, Sobe, Tensão, Triste)
+- Grade de notas para montar a melodia clicando, sem precisar tocar no tempo
+- "Transformar" a voz em instrumento ou o beatbox em bateria, e "Completar" uma melodia com acordes e baixo
+- Take silencioso detectado, gravar isolado (ouvir só a faixa), remover faixa com desfazer
+
+**Bateria e mixagem**
+- Bateria com 8 posições e kits Acústico, 808, Lo-fi e Roda; sequenciador de 16 passos por compasso, pads ao vivo e REC pads quantizado
+- Bateria viva (viradas e humanização) e suingue ajustável no modo Estúdio
 - Mixer por canal: volume, mudo, solo, pan, filtro, delay sincronizado e reverb, com medidores VU
-- BPM de 60 a 180, loops de 1, 2 ou 4 compassos, metrônomo e contagem 4-3-2-1
-- Modo Simples e modo Estúdio
-- Modo Performance em tela cheia, nomes editáveis das faixas e calibração de latência com palmas
-- Gravação dos pads ao vivo, quantizada ao passo mais próximo (ative REC pads e dê play)
-- Salvar e abrir projetos no navegador (IndexedDB), exportar WAV e gravar vídeo da tela com o áudio
+- BPM de 60 a 180, loops de 1, 2 ou 4 compassos, metrônomo, contagem 4-3-2-1 e calibração de latência com palmas
+
+**Guardar e compartilhar**
+- Rascunho salvo sozinho ("Continuar de onde parou"), projetos no navegador (IndexedDB)
+- Baixar ou compartilhar o loop em WAV, gravar vídeo da tela com o áudio, modo Performance em tela cheia
 
 ## Atalhos de teclado
 
@@ -21,7 +35,8 @@ Uma loop station no navegador: grave camadas pelo microfone, sobreponha bateria 
 | --- | --- |
 | `Espaço` | Tocar / parar |
 | `1` – `8` | Gravar (ou cancelar) a faixa |
-| `Q` `W` `E` `R` | Pads: bumbo, caixa, chimbal, palmas |
+| `Q` `W` `E` `R` / `Z` `X` `C` `V` | Pads de bateria (posições 1–4 / 5–8 do kit) |
+| `A` `S` `D` `F` `G` `H` `J` `K` `L` `Ç` | Pads de notas do instrumento (`A`–`F` nos acordes) |
 | `T` | Ligar / desligar REC pads |
 | `P` / `Esc` | Entrar / sair do modo Performance |
 | `?` | Mostrar os atalhos |
@@ -32,6 +47,7 @@ Uma loop station no navegador: grave camadas pelo microfone, sobreponha bateria 
 npm i
 npm run dev   # abre em http://localhost:5173
 npm test
+npm run build && npx vite preview   # build de produção em http://localhost:4173/musical/
 ```
 
 Precisa de um navegador com AudioWorklet (Chrome, Edge, Firefox ou Safari recentes) e permissão de microfone. Use fones para o som das caixas não vazar na gravação.

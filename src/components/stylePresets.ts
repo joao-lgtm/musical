@@ -2,17 +2,22 @@ import type { Instrument, Key, KitId, LoopEngine } from '../audio/types'
 import type { ProgressionStyle } from '../audio/harmony'
 import { DRUM_PRESETS, toPattern } from './drumPresets'
 
-export interface StylePreset { name: string; bpm: number; drums: string; key: Key; instrument: Instrument; kit: KitId; swing: number; progressionStyle: ProgressionStyle; group: 'Brasil' | 'Mundo' }
+export interface StylePreset { name: string; bpm: number; drums: string; key: Key; instrument: Instrument; kit: KitId; swing: number; progressionStyle: ProgressionStyle; group: 'Brasil' | 'Mundo'; beta?: boolean }
 export const STYLES: readonly StylePreset[] = [
   { name: 'Lo-fi', bpm: 80, drums: 'Boom bap', key: 'A', instrument: 'kalimba', kit: 'lofi', swing: 0, progressionStyle: 'lofi', group: 'Mundo' },
   { name: 'Funk', bpm: 104, drums: 'Funk', key: 'E', instrument: 'bass', kit: 'acoustic', swing: 0, progressionStyle: 'funk', group: 'Mundo' },
   { name: 'Reggaeton', bpm: 92, drums: 'Reggaeton', key: 'G', instrument: 'flute', kit: 'acoustic', swing: 0, progressionStyle: 'reggaeton', group: 'Mundo' },
   { name: 'Pop', bpm: 110, drums: 'Pop', key: 'C', instrument: 'ocarina', kit: 'acoustic', swing: 0, progressionStyle: 'pop', group: 'Mundo' },
-  { name: 'Pagode', bpm: 95, drums: 'Pagode', key: 'D', instrument: 'cavaquinho', kit: 'roda', swing: 0.12, progressionStyle: 'pagode', group: 'Brasil' },
-  { name: 'Samba', bpm: 100, drums: 'Samba', key: 'C', instrument: 'cavaquinho', kit: 'roda', swing: 0.15, progressionStyle: 'samba', group: 'Brasil' },
-  { name: 'Funk carioca', bpm: 130, drums: 'Funk carioca', key: 'A', instrument: 'bass', kit: '808', swing: 0.05, progressionStyle: 'funkcarioca', group: 'Brasil' },
+  { name: 'Pagode', bpm: 95, drums: 'Pagode', key: 'D', instrument: 'cavaquinho', kit: 'roda', swing: 0.12, progressionStyle: 'pagode', group: 'Brasil', beta: true },
+  { name: 'Samba', bpm: 100, drums: 'Samba', key: 'C', instrument: 'cavaquinho', kit: 'roda', swing: 0.15, progressionStyle: 'samba', group: 'Brasil', beta: true },
+  { name: 'Funk carioca', bpm: 130, drums: 'Funk carioca', key: 'A', instrument: 'bass', kit: '808', swing: 0.05, progressionStyle: 'funkcarioca', group: 'Brasil', beta: true },
 ]
 const appliedStyles = new WeakMap<LoopEngine, StylePreset>()
+/** Estilos prontos (sem os beta): destaques da entrada e sorteio da banda. Os beta continuam em "Ver todos", marcados. */
+export const STABLE_STYLES = STYLES.filter((style) => !style.beta)
+/** Destaques da tela inicial. */
+export const FEATURED_STYLES = ['Pop', 'Lo-fi', 'Reggaeton', 'Funk']
+
 export const getAppliedStyle = (engine: LoopEngine) => appliedStyles.get(engine)
 export const rememberStyle = (engine: LoopEngine, style: StylePreset) => { appliedStyles.set(engine, style) }
 const pending = new WeakMap<LoopEngine, StylePreset>()

@@ -1,7 +1,7 @@
 import { openNoteGrid } from './NoteGrid'
 import { useEffect, useRef, useState } from 'react'
 import { bandFromStyle, completeFromTake } from '../audio/transform'
-import { STYLES, rememberStyle } from './stylePresets'
+import { STABLE_STYLES, rememberStyle } from './stylePresets'
 import type { LoopEngine } from '../audio/types'
 import { useEngine, useEngineState } from '../hooks/useEngine'
 import { DiceIcon } from './Icons'
@@ -51,7 +51,7 @@ export function BatchActions({ track }: { track?: number }) {
         openNoteGrid(engine, a); openNoteGrid(engine, b)
         setMessage(`Pronto: acordes ${result.chords.join(' ')} na faixa ${a + 1} e baixo na faixa ${b + 1}. Desfazer volta tudo.`)
       } else {
-        const choice = STYLES[Math.floor(Math.random() * STYLES.length)]
+        const choice = STABLE_STYLES[Math.floor(Math.random() * STABLE_STYLES.length)]
         const seed = Math.floor(Math.random() * 1000000)
         const result = await bandFromStyle(snapshot.key, snapshot.bpm, snapshot.bars, choice.progressionStyle, seed)
         if (!current()) return
